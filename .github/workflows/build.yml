@@ -1,0 +1,102 @@
+name: Build apps
+
+# Builds double-click Semester apps for macOS, Windows, and Linux.
+# Runs when you publish a GitHub Release (attaches the apps to it),
+# or manually from the Actions tab (uploads them as artifacts).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux webview system libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libgirepository1.0-dev gir1.2-webkit2-4.1 python3-gi
+
+      - run: pip install requests pyinstaller pywebview pillow
+
+      - name: Generate icon
+        run: python make_icon.py || true
+
+      - name: Build + sign + notarize (macOS)
+        id: mac
+        if: runner.os == 'macOS'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          set -e
+          # Import the Developer ID cert into a throwaway keychain (secrets are masked in logs).
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p actions build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s build.keychain login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions build.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Build (onedir → notarization-friendly .app)
+          pyinstaller --windowed --collect-all webview --icon icon.icns \
+            --osx-bundle-identifier com.ramonledesma.semester --name "Semester" app.py
+          # Sign with hardened runtime
+          codesign --deep --force --timestamp --options runtime \
+            --entitlements entitlements.plist \
+            --sign "Developer ID Application: Ramon Ledesma (${NOTARY_TEAM_ID})" "dist/Semester.app"
+          codesign --verify --deep --strict "dist/Semester.app"
+          # Notarize + staple
+          ditto -c -k --keepParent "dist/Semester.app" "Semester-macOS.zip"
+          xcrun notarytool submit "Semester-macOS.zip" --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple "dist/Semester.app"
+          ditto -c -k --keepParent "dist/Semester.app" "Semester-macOS.zip"
+          security delete-keychain build.keychain || true
+          echo "asset=Semester-macOS.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Windows)
+        id: win
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --windowed --collect-all webview --icon icon.ico --name "Semester" app.py
+          Copy-Item dist/Semester.exe Semester-Windows.exe
+          echo "asset=Semester-Windows.exe" >> $env:GITHUB_OUTPUT
+
+      - name: Build (Linux)
+        id: lin
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller --onefile --collect-all webview --name semester app.py
+          mv dist/semester Semester-Linux
+          echo "asset=Semester-Linux" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.mac.outputs.asset || steps.win.outputs.asset || steps.lin.outputs.asset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: semester-${{ matrix.os }}
+          path: ${{ steps.mac.outputs.asset || steps.win.outputs.asset || steps.lin.outputs.asset }}
