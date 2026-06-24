@@ -1,0 +1,157 @@
+name: Build apps
+
+# Builds double-click Semester apps for macOS, Windows, and Linux.
+# Runs when you publish a GitHub Release (attaches the apps to it),
+# or manually from the Actions tab (uploads them as artifacts).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: runner.os != 'macOS'
+        with:
+          python-version: "3.12"
+
+      # PyInstaller builds for the Python it runs on, and setup-python's Mac Python is Apple Silicon
+      # only — so Intel Macs got an app they couldn't open. python.org's installer carries both.
+      - name: Universal Python (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sSLo "$RUNNER_TEMP/py.pkg" https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+          sudo installer -pkg "$RUNNER_TEMP/py.pkg" -target /
+          FW=/Library/Frameworks/Python.framework/Versions/3.12/bin
+          mkdir -p "$RUNNER_TEMP/pybin"
+          ln -sf "$FW/python3" "$RUNNER_TEMP/pybin/python"
+          ln -sf "$FW/pip3" "$RUNNER_TEMP/pybin/pip"
+          echo "$RUNNER_TEMP/pybin" >> "$GITHUB_PATH"
+          echo "$FW" >> "$GITHUB_PATH"
+          lipo -archs /Library/Frameworks/Python.framework/Versions/3.12/Python   # should say: x86_64 arm64
+
+      - name: Linux webview system libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libgirepository1.0-dev gir1.2-webkit2-4.1 python3-gi
+
+      - run: pip install requests pyinstaller pywebview pillow
+
+      # Runs on all three OSes, so anything that only breaks on one of them (Windows rejects
+      # "%-d" dates, for instance) fails here instead of shipping.
+      - name: Checks
+        run: python check.py
+
+      - name: Generate icon
+        run: python make_icon.py || true
+
+      - name: Build + sign + notarize (macOS)
+        id: mac
+        if: runner.os == 'macOS'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          set -e
+          # Import the Developer ID cert into a throwaway keychain (secrets are masked in logs).
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p actions build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s build.keychain login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions build.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Build (onedir → notarization-friendly .app)
+          pyinstaller --windowed --collect-all webview --icon icon.icns --add-data "static:static" \
+            --target-arch universal2 \
+            --osx-bundle-identifier com.ramonledesma.semester --name "Semester" app.py
+          # Every compiled piece has to carry Intel and Apple Silicon code, or Intel Macs can't open it.
+          : > "$RUNNER_TEMP/thin.txt"
+          find dist/Semester.app -type f -print0 | while IFS= read -r -d '' f; do
+            a=$(lipo -archs "$f" 2>/dev/null) || continue
+            if ! echo "$a" | grep -q x86_64 || ! echo "$a" | grep -q arm64; then echo "$f ($a)" >> "$RUNNER_TEMP/thin.txt"; fi
+          done
+          if [ -s "$RUNNER_TEMP/thin.txt" ]; then echo "Not universal:"; cat "$RUNNER_TEMP/thin.txt"; exit 1; fi
+          # And both halves have to actually run. Rosetta lets this Apple Silicon runner run the Intel one.
+          sudo softwareupdate --install-rosetta --agree-to-license
+          arch -arm64 "dist/Semester.app/Contents/MacOS/Semester" --selfcheck
+          arch -x86_64 "dist/Semester.app/Contents/MacOS/Semester" --selfcheck
+          rm -f semester-selfcheck.html
+          /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 11.0" "dist/Semester.app/Contents/Info.plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 11.0" "dist/Semester.app/Contents/Info.plist"
+          # Stamp the release version so Finder's Get Info doesn't say 0.0.0
+          VER="${GITHUB_REF_NAME#v}"
+          if [[ "$VER" =~ ^[0-9.]+$ ]]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "dist/Semester.app/Contents/Info.plist"
+          fi
+          # Sign with hardened runtime
+          codesign --deep --force --timestamp --options runtime \
+            --entitlements entitlements.plist \
+            --sign "Developer ID Application: Ramon Ledesma (${NOTARY_TEAM_ID})" "dist/Semester.app"
+          codesign --verify --deep --strict "dist/Semester.app"
+          # Notarize + staple
+          ditto -c -k --keepParent "dist/Semester.app" "Semester-mac.zip"
+          xcrun notarytool submit "Semester-mac.zip" --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple "dist/Semester.app"
+          ditto -c -k --keepParent "dist/Semester.app" "Semester-mac.zip"   # the in-app updater uses this
+          # Drag-to-Applications disk image for people downloading from the website
+          mkdir -p dmgroot && ditto "dist/Semester.app" "dmgroot/Semester.app" && ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "Semester" -srcfolder dmgroot -ov -format UDZO "Semester-mac.dmg"
+          codesign --force --timestamp --sign "Developer ID Application: Ramon Ledesma (${NOTARY_TEAM_ID})" "Semester-mac.dmg"
+          xcrun notarytool submit "Semester-mac.dmg" --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple "Semester-mac.dmg"
+          security delete-keychain build.keychain || true
+          echo "asset=Semester-mac.*" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Windows)
+        id: win
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --windowed --collect-all webview --icon icon.ico --add-data "static;static" --name "Semester" app.py
+          Copy-Item dist/Semester.exe Semester-Windows.exe
+          # Windowed builds have no console, so wait on the process and read its exit code.
+          $p = Start-Process -FilePath .\Semester-Windows.exe -ArgumentList '--selfcheck' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the built app failed its self-check (exit $($p.ExitCode))" }
+          if (-not (Test-Path semester-selfcheck.html)) { throw "the built app drew no dashboard" }
+          Remove-Item semester-selfcheck.html
+          echo "asset=Semester-Windows.exe" >> $env:GITHUB_OUTPUT
+
+      - name: Build (Linux)
+        id: lin
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller --onefile --collect-all webview --add-data "static:static" --name semester app.py
+          mv dist/semester Semester-Linux
+          ./Semester-Linux --selfcheck
+          test -s semester-selfcheck.html && rm -f semester-selfcheck.html
+          echo "asset=Semester-Linux" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.mac.outputs.asset || steps.win.outputs.asset || steps.lin.outputs.asset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: semester-${{ matrix.os }}
+          path: ${{ steps.mac.outputs.asset || steps.win.outputs.asset || steps.lin.outputs.asset }}
