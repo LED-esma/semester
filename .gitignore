@@ -1,0 +1,23 @@
+# Your private Canvas token lives here — never commit it
+config.json
+
+# Generated output
+dashboard.html
+planner_data.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# OS
+.DS_Store
+
+# Icon build intermediate
+icon.iconset/
