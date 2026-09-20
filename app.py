@@ -1044,6 +1044,15 @@ class Handler(BaseHTTPRequestHandler):
                 "url": url or f"https://github.com/{GH_REPO}/releases",
                 "newer": newer, "mode": update_mode(), "checked": bool(tag),
             }), "application/json")
+        if self.path.startswith("/api/data"):
+            # Everything the dashboard draws itself from, as one document. The page still gets
+            # this embedded at build time; this is the same data for anything that is not the page.
+            try:
+                with open(cp.PAGE_DATA_PATH, encoding="utf-8") as f:
+                    return self._send(200, f.read(), "application/json")
+            except FileNotFoundError:
+                return self._send(404, json.dumps({"ok": False, "error": "No data yet. Open Semester once so it can fetch from Canvas."}),
+                                  "application/json")
         if self.path.startswith("/api/canvas/"):
             return self._canvas_get()
         if self.path.startswith("/calendar.ics"):

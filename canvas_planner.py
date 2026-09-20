@@ -85,6 +85,7 @@ DATA_DIR = _data_dir()
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 HTML_PATH = os.path.join(DATA_DIR, "dashboard.html")
 DATA_PATH = os.path.join(DATA_DIR, "planner_data.json")
+PAGE_DATA_PATH = os.path.join(DATA_DIR, "dashboard_data.json")
 OVERRIDES_PATH = os.path.join(DATA_DIR, "overrides.json")  # {assignment_id: planner_override_id}
 NOTES_PATH = os.path.join(DATA_DIR, "notes.json")          # {assignment_id: planner_note_id}
 
@@ -1007,7 +1008,7 @@ def _load_static(name):
         return f.read()
 
 
-def render_html(items, warnings, courses_info, announcements, colors, now, accent="#6366f1", grades=None, classes=None):
+def render_html(items, warnings, courses_info, announcements, colors, now, accent="#6366f1", grades=None, classes=None, data_out=None):
     # Overdue items are removed from the planner entirely.
     pending = [i for i in items if not i["submitted"] and i["bucket"] != "overdue"]
     done = sum(1 for i in items if i["submitted"])
@@ -1169,6 +1170,18 @@ def render_html(items, warnings, courses_info, announcements, colors, now, accen
 
     # Embed per-card details for the popup (escape </ so it can't break out of the tag).
     data_json = json.dumps(details, ensure_ascii=False).replace("</", "<\\/")
+
+    if data_out is not None:
+        # Read back the same strings the page embeds, rather than rebuilding the values, so
+        # /api/data and the dashboard can never drift apart.
+        data_out.update({
+            "generated": now.isoformat(),
+            "items": json.loads(data_json),
+            "kanban": json.loads(kanban_json),
+            "grades": json.loads(grades_json),
+            "classes": json.loads(classes_json),
+            "courses": json.loads(courses_compact),
+        })
 
     css = _load_static("style.css").replace("__ACCENT__", accent)
     js = (_load_static("app.js")
@@ -1492,7 +1505,11 @@ def build_dashboard(cfg, now=None, log=lambda *a: None):
                    "announcements": announcements, "courses": courses_info, "grades": grades}, f, indent=2)
 
     accent = cfg.get("accent") or "#6366f1"
-    html = render_html(items, warnings, courses_info, announcements, colors, now, accent, grades, classes)
+    page_data = {}
+    html = render_html(items, warnings, courses_info, announcements, colors, now, accent, grades, classes,
+                       data_out=page_data)
+    write_text(PAGE_DATA_PATH + ".tmp", json.dumps(page_data, ensure_ascii=False, indent=2))
+    replace_file(PAGE_DATA_PATH + ".tmp", PAGE_DATA_PATH)
     tmp_path = HTML_PATH + ".tmp"
     write_text(tmp_path, html)
     replace_file(tmp_path, HTML_PATH)  # atomic: the app may be serving the previous file right now
@@ -1522,8 +1539,10 @@ def main():
                 "syllabus": "Grading: 40% labs, 30% exams, 30% participation. Late work loses 10%/day.",
                 "pending": sum(1 for i in items if i["course"] == n and not i["submitted"] and i["due"])}
                for n in names]
-        html = render_html(items, warnings, crs, ann, colors, now)
+        page_data = {}
+        html = render_html(items, warnings, crs, ann, colors, now, data_out=page_data)
         write_text(HTML_PATH, html)
+        write_text(PAGE_DATA_PATH, json.dumps(page_data, ensure_ascii=False, indent=2))
         print(f"Demo dashboard -> {HTML_PATH}")
         if "--open" in sys.argv:
             webbrowser.open(f"file://{HTML_PATH}")

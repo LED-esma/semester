@@ -3,6 +3,7 @@ config.json
 
 # Generated output
 dashboard.html
+dashboard_data.json
 planner_data.json
 
 # Python

@@ -325,6 +325,34 @@ def _desc_sanitized():
     return f"{len(attacks)} payloads blocked, formatting kept, wired into the page"
 
 
+@check("the data endpoint matches the page")
+def _page_data_endpoint():
+    """/api/data serves what a second client reads. The dashboard still gets the same data
+    embedded in the page, so the two must not drift: this renders a page, captures what
+    render_html handed out, and compares them key by key."""
+    now = datetime.now(timezone.utc)
+    items = cp.demo_items(now)
+    names = sorted({i["course"] for i in items})
+    colors = {n: cp.COURSE_PALETTE[k % len(cp.COURSE_PALETTE)] for k, n in enumerate(names)}
+    crs = [{"name": n, "url": "#", "syllabus_url": "#", "syllabus": "", "pending": 1} for n in names]
+
+    out = {}
+    page = cp.render_html(items, cp.workload_warnings(items, now, threshold=2), crs, [], colors, now,
+                          data_out=out)
+
+    for key in ("generated", "items", "kanban", "grades", "classes", "courses"):
+        assert key in out, f"the endpoint payload is missing {key!r}"
+
+    tags = {"itemdata": "items", "kanbandata": "kanban", "gradesdata": "grades", "classesdata": "classes"}
+    for tag, key in tags.items():
+        m = re.search(r'<script type="application/json" id="%s">(.*?)</script>' % tag, page, re.S)
+        assert m, f"the page no longer embeds {tag}"
+        assert json.loads(m.group(1)) == out[key], f"{key} differs between the page and the endpoint"
+
+    assert out["items"], "no items reached the endpoint"
+    return f"{len(out['items'])} items, {len(out['kanban'])} on the board, identical to the page"
+
+
 @check("token creation handles school limits")
 def _tokens():
     """The paths that broke before: a school that demands an expiry date, one that caps how far
