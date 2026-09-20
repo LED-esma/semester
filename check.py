@@ -353,6 +353,35 @@ def _page_data_endpoint():
     return f"{len(out['items'])} items, {len(out['kanban'])} on the board, identical to the page"
 
 
+@check("the setup screen renders from its file")
+def _setup_page():
+    """setup.html and create_token.js used to be Python string constants that could not fail.
+    They are bundled files now, so a packaging miss would break the first screen a new user
+    sees. This draws every variant the app can serve."""
+    import app as appmod
+    variants = {
+        "first run":  appmod.setup_html(),
+        "reauth":     appmod.setup_html(reauth=True),
+        "pre-filled": appmod.setup_html(base_url="https://4cd.instructure.com"),
+    }
+    for name, html in variants.items():
+        assert html.startswith("<!DOCTYPE html>"), f"{name}: not a page"
+        assert 'id="token"' in html, f"{name}: no token field"
+        assert "</html>" in html, f"{name}: truncated"
+        assert len(html) > 10_000, f"{name}: suspiciously small ({len(html)} bytes)"
+    arm = "<script>window.__REAUTH__ = true;"   # the injection, not the page's own reference to it
+    assert arm in variants["reauth"], "reauth mode did not arm"
+    assert arm not in variants["first run"], "reauth armed when it should not"
+    assert "4cd.instructure.com" in variants["pre-filled"], "the school URL was not pre-filled"
+
+    # a quoted school URL must not break out of the attribute it lands in
+    nasty = appmod.setup_html(base_url='" onload="alert(1)')
+    assert 'onload="alert(1)"' not in nasty, "the pre-filled URL escaped its attribute"
+
+    assert "users/self/tokens" in cp._load_static("create_token.js"), "sign-in script missing"
+    return f"{len(variants)} variants, {len(variants['first run']) // 1024} KB"
+
+
 @check("token creation handles school limits")
 def _tokens():
     """The paths that broke before: a school that demands an expiry date, one that caps how far

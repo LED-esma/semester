@@ -162,400 +162,8 @@ def self_update():
 # --------------------------------------------------------------------------- #
 # Setup wizard (Apple Setup Assistant style: one focused step per screen)
 # --------------------------------------------------------------------------- #
-SETUP_HTML = r"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Welcome to Semester</title>
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230a0a0c"/><text x="50" y="54" font-family="Helvetica,Arial,sans-serif" font-size="74" font-weight="700" fill="white" text-anchor="middle" dominant-baseline="central">S</text></svg>'>
-<style>
-  :root { --accent: #6366f1; --bg: #fbfbfd; --text: #1d1d1f; --dim: #6e6e73; --field: #fff; --line: #d2d2d7;
-          --soft: #f0f0f3; --ok: #1d8a3a; --bad: #c0392b; }
-  html.dark { --bg: #1c1c1e; --text: #f5f5f7; --dim: #98989d; --field: #2c2c2e; --line: #3a3a3c;
-              --soft: #2c2c2e; --ok: #4cd964; --bad: #ff6b5e; }
-  [hidden] { display: none !important; }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-         background: var(--bg); color: var(--text); transition: background .2s, color .2s;
-         font-family: -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; }
-  .wiz { width: min(520px, 90vw); text-align: center; position: relative; padding: 40px 0; }
-  .back { position: absolute; top: 0; left: 0; font: inherit; font-size: 15px; background: none; border: none;
-          color: var(--accent); cursor: pointer; padding: 6px 0; }
-  .screen { display: none; }
-  .screen.active { display: block; animation: fade .25s ease; }
-  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .mark { width: 72px; height: 72px; border-radius: 17px; background: #0a0a0c; color: #fff; margin: 0 auto 22px;
-          font: 700 50px/72px Helvetica, Arial, sans-serif; }
-  html.dark .mark { box-shadow: 0 0 0 1px #3a3a3c; }
-  h1 { font-size: 30px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 10px; }
-  p { font-size: 16px; line-height: 1.5; color: var(--dim); margin: 0 auto 24px; max-width: 420px; }
-  .fine { font-size: 13px; color: var(--dim); margin-top: 14px; }
-  input[type=text], input[type=password] { width: 100%; max-width: 380px; font-size: 16px; padding: 13px 15px;
-         background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
-         outline: none; font-family: inherit; }
-  input[type=text]:focus, input[type=password]:focus { border-color: var(--accent);
-         box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
-  .cont { display: inline-block; background: var(--accent); color: #fff; border: none; font-size: 16px; font-weight: 500;
-          padding: 13px 40px; border-radius: 980px; cursor: pointer; font-family: inherit; }
-  .cont:hover { filter: brightness(.95); }
-  .cont:disabled { opacity: .6; cursor: default; }
-  .combo { position: relative; max-width: 380px; margin: 0 auto; }
-  .suggest { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 5; margin: 0; padding: 4px;
-             list-style: none; text-align: left; background: var(--field); border: 1px solid var(--line);
-             border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.12); }
-  .suggest li { padding: 9px 12px; border-radius: 8px; cursor: pointer; font-size: 15px; }
-  .suggest li[aria-selected=true] { background: var(--soft); }
-  .suggest .d { display: block; font-size: 12px; color: var(--dim); }
-  .suggest .none { color: var(--dim); cursor: default; font-size: 14px; }
-  .status { min-height: 22px; font-size: 14px; margin: 10px auto 16px; max-width: 420px; color: var(--dim); }
-  .status.ok { color: var(--ok); } .status.bad { color: var(--bad); }
-  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent);
-          border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 7px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .steps { text-align: left; max-width: 380px; margin: 0 auto 20px; padding: 0; list-style: none; counter-reset: s; }
-  .steps li { counter-increment: s; position: relative; padding: 1px 0 12px 34px; font-size: 15px; line-height: 1.45; }
-  .steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 22px; height: 22px; border-radius: 50%;
-          background: var(--soft); font-size: 12px; font-weight: 600; text-align: center; line-height: 22px; }
-  .steps b { font-weight: 600; }
-  .linkbtn { background: none; border: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; }
-  .linkbtn:hover { text-decoration: underline; }
-  .note { text-align: left; background: var(--soft); border-left: 3px solid #f59e0b; border-radius: 8px;
-          padding: 11px 14px; font-size: 14px; line-height: 1.5; margin: 0 auto 20px; max-width: 420px; }
-  .preview { max-width: 380px; margin: 0 auto 18px; background: var(--field); border: 1px solid var(--line);
-             border-radius: 14px; padding: 14px 16px; text-align: left; }
-  .pv-top, .pv-bot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--dim); }
-  .pv-course { display: flex; align-items: center; gap: 6px; }
-  .pv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-  .pv-title { font-size: 15px; font-weight: 600; margin: 6px 0 10px; }
-  .pv-btn { background: var(--accent); color: #fff; font-weight: 500; padding: 4px 12px; border-radius: 980px; }
-  .rows { max-width: 380px; margin: 0 auto 6px; text-align: left; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0;
-         border-top: 1px solid var(--line); font-size: 15px; }
-  .row:first-child { border-top: none; }
-  .rsub { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; }
-  .seg { display: inline-flex; background: var(--soft); border-radius: 9px; padding: 2px; flex: none; }
-  .seg button { border: none; background: none; color: var(--text); font: inherit; font-size: 13px;
-                padding: 5px 12px; border-radius: 7px; cursor: pointer; }
-  .seg button[aria-pressed=true] { background: var(--field); box-shadow: 0 1px 3px rgba(0,0,0,.15); font-weight: 500; }
-  .swatches { display: flex; gap: 8px; flex: none; }
-  .sw { width: 22px; height: 22px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
-        box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
-  .sw[aria-pressed=true] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
-  .sw.custom { background: conic-gradient(#f43f5e, #f59e0b, #22c55e, #06b6d4, #6366f1, #d946ef, #f43f5e);
-               position: relative; overflow: hidden; }
-  .sw.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-  .switch { position: relative; width: 44px; height: 26px; flex: none; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .switch .track { position: absolute; inset: 0; background: var(--line); border-radius: 13px; cursor: pointer; transition: background .2s; }
-  .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; background: #fff;
-                          border-radius: 50%; transition: transform .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
-  .switch input:checked + .track { background: var(--accent); }
-  .switch input:checked + .track::after { transform: translateX(18px); }
-  .dots { display: flex; gap: 8px; justify-content: center; margin-top: 32px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
-  .dot.on { background: var(--accent); }
-</style></head>
-<body>
-<div class="wiz">
-  <button class="back" id="back">&lsaquo; Back</button>
-
-  <section class="screen active" data-i="0">
-    <div class="mark">S</div>
-    <h1>Welcome to Semester</h1>
-    <p>Your assignments, deadlines, and grades from Canvas, in one calm place. Setup takes about a minute.</p>
-    <button class="cont" data-next>Get started</button>
-    <div class="fine">Everything stays on this computer.</div>
-  </section>
-
-  <section class="screen" data-i="1">
-    <h1>Find your school</h1>
-    <p>Search for your school, or paste your Canvas address.</p>
-    <div class="combo">
-      <input id="url" type="text" placeholder="School name or Canvas address" autocomplete="off" spellcheck="false" value="__URL__"
-             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="schoolList">
-      <ul class="suggest" id="schoolList" role="listbox" hidden></ul>
-    </div>
-    <div class="status" id="urlStatus"></div>
-    <button class="cont" id="urlNext">Continue</button>
-  </section>
-
-  <section class="screen" data-i="2">
-    <h1 id="tokenHead">Connect your account</h1>
-    <div class="note" id="reauthNote" hidden>Your Canvas access expired, so Semester can&rsquo;t refresh. Reconnect below. Your settings and plans stay put.</div>
-    <div id="signinBox" hidden>
-      <p>Sign in with your school account. Semester sets up access for you.</p>
-      <button class="cont" id="signin" type="button">Sign in to Canvas</button>
-      <div class="status" id="signStatus"></div>
-      <button class="linkbtn" id="signinContinue" type="button" hidden>Already signed in? Continue</button>
-      <p class="fine" id="googleNote" hidden>Your school signs in with Google, which may not open inside Semester. If it doesn&rsquo;t, paste a token instead.</p>
-      <button class="linkbtn" id="showPaste" type="button">Paste a token instead</button>
-    </div>
-    <div id="pasteBox">
-      <p id="tokenLead">Canvas lets apps like Semester in with an access token. Making one takes a few seconds:</p>
-      <ol class="steps">
-        <li><a class="linkbtn" id="openCanvas" href="#" target="_blank" rel="noopener">Open your Canvas settings &#8599;</a></li>
-        <li>Click <b>+ New Access Token</b>, name it <b>Semester</b>, and pick the latest expiry date Canvas allows.</li>
-        <li>Copy the token and paste it below. It connects automatically.</li>
-      </ol>
-      <input id="token" type="password" placeholder="Paste your token" autocomplete="off" spellcheck="false">
-      <div class="status" id="tokStatus"></div>
-    </div>
-    <div class="fine" id="tokenFine">Your token is saved only on this computer.</div>
-  </section>
-
-  <section class="screen" data-i="3">
-    <h1>Make it yours</h1>
-    <p id="helloLead">You can change any of this later in Settings.</p>
-    <div class="preview" aria-hidden="true">
-      <div class="pv-top"><span class="pv-course"><span class="pv-dot"></span>Calculus III</span><span>10 pts</span></div>
-      <div class="pv-title">Problem Set 4</div>
-      <div class="pv-bot"><span>Due Thu 11:59 PM</span><span class="pv-btn">Mark done</span></div>
-    </div>
-    <div class="rows">
-      <div class="row"><span>Appearance</span>
-        <div class="seg" id="theme"><button data-v="system">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div></div>
-      <div class="row"><span>Accent color</span><div class="swatches" id="swatches"></div></div>
-      <div class="row"><span>Reminders<span class="rsub">A heads-up before things are due, even when Semester is closed.</span></span>
-        <label class="switch"><input type="checkbox" id="remind" checked aria-label="Reminders"><span class="track"></span></label></div>
-    </div>
-    <div class="status" id="buildStatus"></div>
-    <button class="cont" id="finish">Open Semester</button>
-  </section>
-
-  <div class="dots" id="dots"></div>
-</div>
-<script>
-  const $ = id => document.getElementById(id);
-  const REAUTH = !!window.__REAUTH__;
-  const SIGNIN = !!window.__SIGNIN__;
-  const screens = [...document.querySelectorAll('.screen')];
-  const dotsBox = $('dots');
-  let i = 0;
-  screens.forEach(() => { const d = document.createElement('div'); d.className = 'dot'; dotsBox.appendChild(d); });
-
-  function show(n) {
-    i = Math.max(0, Math.min(screens.length - 1, n));
-    screens.forEach(s => s.classList.toggle('active', +s.dataset.i === i));
-    [...dotsBox.children].forEach((d, k) => d.classList.toggle('on', k === i));
-    $('back').style.visibility = i === 0 ? 'hidden' : 'visible';
-    const inp = screens[i].querySelector('input[type=text], input[type=password]');
-    if (inp) setTimeout(() => { if (!inp.offsetParent) return; inp.focus(); if (inp.value) inp.select(); }, 60);  // typing replaces a pre-filled value
-  }
-  $('back').addEventListener('click', () => show(i - 1));
-  document.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => show(i + 1)));
-  document.addEventListener('keydown', e => {
-    if (e.key !== 'Enter' || /INPUT|BUTTON/.test(e.target.tagName)) return;
-    if (i === 0) show(1); else if (i === 3) $('finish').click();
-  });
-
-  const post = async (path, body) => (await fetch(path, { method: 'POST',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const setStatus = (el, html, kind) => { el.className = 'status' + (kind ? ' ' + kind : ''); el.innerHTML = html || ''; };
-  const CHECKING = '<span class="spin"></span>Checking…';
-  const OFFLINE = 'Couldn’t reach Semester. Try again.';
-
-  // Look: starts from whatever the app already uses, so re-running setup keeps it.
-  const SW = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#14b8a6', '#0a84ff', '#22c55e'];
-  let accent = '#6366f1', theme = 'system';
-  const mq = matchMedia('(prefers-color-scheme: dark)');
-  const applyTheme = () => document.documentElement.classList.toggle('dark', theme === 'dark' || (theme === 'system' && mq.matches));
-  mq.addEventListener('change', applyTheme);
-  function setTheme(v) {
-    theme = v; [...$('theme').children].forEach(b => b.setAttribute('aria-pressed', b.dataset.v === v)); applyTheme();
-  }
-  function setAccent(c) {
-    accent = c; document.documentElement.style.setProperty('--accent', c);
-    [...$('swatches').children].forEach(s => s.setAttribute('aria-pressed',
-      s.classList.contains('custom') ? !SW.includes(c) : s.dataset.c === c));
-  }
-  [...$('theme').children].forEach(b => b.addEventListener('click', () => setTheme(b.dataset.v)));
-  SW.forEach(c => {
-    const b = document.createElement('button'); b.className = 'sw'; b.dataset.c = c; b.style.background = c;
-    b.setAttribute('aria-label', 'Accent ' + c); b.addEventListener('click', () => setAccent(c)); $('swatches').appendChild(b);
-  });
-  const custom = document.createElement('label'); custom.className = 'sw custom'; custom.title = 'Custom color';
-  custom.innerHTML = '<input type="color" aria-label="Custom accent color">'; $('swatches').appendChild(custom);
-  custom.querySelector('input').addEventListener('input', e => setAccent(e.target.value));
-  let saved = {};
-  try { saved = { theme: localStorage.getItem('semester.theme'), accent: localStorage.getItem('semester.accent') }; } catch (e) {}
-  setTheme(saved.theme || 'system'); setAccent(saved.accent || '#6366f1');
-
-  // School: accepts a full Canvas link, a bare address, or just the school's Canvas name.
-  let baseUrl = '', urlTimer = null, urlSeq = 0;
-  async function checkUrl(value) {
-    const raw = (typeof value === 'string' ? value : $('url').value).trim(), st = $('urlStatus');
-    if (!raw) { setStatus(st, ''); return false; }
-    const seq = ++urlSeq;
-    setStatus(st, CHECKING);
-    try {
-      const d = await post('/api/check_url', { base_url: raw });
-      if (seq !== urlSeq) return false;  // a newer check replaced this one
-      if (!d.ok) { setStatus(st, esc(d.error), 'bad'); return false; }
-      baseUrl = d.base_url;
-      setStatus(st, 'Found Canvas at ' + esc(baseUrl.replace(/^https?:\/\//, '')), 'ok');
-      return true;
-    } catch (e) { setStatus(st, OFFLINE, 'bad'); return false; }
-  }
-  async function urlNext() {
-    clearTimeout(urlTimer);
-    if (baseUrl) return show(2);
-    const v = $('url').value.trim();
-    if (!looksLikeAddress(v) && schools.length) return chooseSchool(Math.max(pick, 0));  // a name: take the highlighted match
-    if (await checkUrl($('url').dataset.domain || v)) show(2);
-  }
-  // Typing a name searches Instructure's school directory; a link or address is checked directly.
-  const looksLikeAddress = v => /[./:]/.test(v);
-  const list = $('schoolList');
-  let schools = [], pick = -1, schoolSeq = 0;
-  function renderSchools(msg) {
-    list.innerHTML = '';
-    if (msg) { const li = document.createElement('li'); li.className = 'none'; li.textContent = msg; list.appendChild(li); }
-    schools.forEach((sc, k) => {
-      const li = document.createElement('li'); li.setAttribute('role', 'option'); li.setAttribute('aria-selected', k === pick);
-      li.innerHTML = '<span></span><span class="d"></span>';
-      li.firstChild.textContent = sc.name; li.lastChild.textContent = sc.domain;
-      li.addEventListener('mousedown', ev => { ev.preventDefault(); chooseSchool(k); });
-      list.appendChild(li);
-    });
-    const open = !!(msg || schools.length);
-    list.hidden = !open; $('url').setAttribute('aria-expanded', open);
-  }
-  const closeSchools = () => { schools = []; pick = -1; renderSchools(); };
-  async function searchSchools() {
-    const q = $('url').value.trim(), seq = ++schoolSeq;
-    if (q.length < 2 || looksLikeAddress(q)) return closeSchools();
-    let found = [];
-    try { found = await (await fetch('/api/schools?q=' + encodeURIComponent(q))).json(); } catch (e) {}
-    if (seq !== schoolSeq) return;  // a newer search replaced this one
-    schools = found.slice(0, 6); pick = schools.length ? 0 : -1;
-    renderSchools(schools.length ? '' : 'No schools found. Try the full name, or paste your Canvas address.');
-  }
-  async function chooseSchool(k) {
-    const sc = schools[k]; closeSchools();
-    $('url').value = sc.name; $('url').dataset.domain = sc.domain; baseUrl = '';
-    $('googleNote').hidden = !/google/i.test(sc.auth || '');
-    if (await checkUrl(sc.domain)) setTimeout(() => show(2), 500);
-  }
-  $('url').addEventListener('input', e => {
-    baseUrl = ''; delete $('url').dataset.domain; $('googleNote').hidden = true;
-    clearTimeout(urlTimer); setStatus($('urlStatus'), '');
-    if (looksLikeAddress($('url').value.trim())) {  // a paste is checked at once; typing waits for a short pause
-      closeSchools(); urlTimer = setTimeout(checkUrl, e.inputType === 'insertFromPaste' ? 0 : 450);
-    } else urlTimer = setTimeout(searchSchools, 200);
-  });
-  $('url').addEventListener('keydown', e => {
-    const open = !list.hidden && schools.length;
-    if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      e.preventDefault(); pick = (pick + (e.key === 'ArrowDown' ? 1 : schools.length - 1)) % schools.length; renderSchools();
-    } else if (e.key === 'Escape') closeSchools();
-    else if (e.key === 'Enter') { if (open && pick >= 0) chooseSchool(pick); else urlNext(); }
-  });
-  $('url').addEventListener('blur', () => setTimeout(closeSchools, 150));
-  $('urlNext').addEventListener('click', urlNext);
-
-  // Token: checked the moment it's pasted; success moves on by itself.
-  // A real link, not window.open: the app window only hands real links to the browser.
-  $('openCanvas').addEventListener('click', e => {
-    const u = (baseUrl || $('url').value.trim()).replace(/\/+$/, '');
-    if (!u) { e.preventDefault(); show(1); return; }
-    e.currentTarget.href = (/^https?:\/\//.test(u) ? u : 'https://' + u) + '/profile/settings#access_tokens';
-  });
-  function connected(st, name) {
-    setStatus(st, 'Connected' + (name ? ' as ' + esc(name) : '') + '.', 'ok');
-    if (REAUTH) { setTimeout(() => { location.href = '/'; }, 700); return; }
-    const first = (name || '').split(' ')[0];
-    if (first) $('helloLead').textContent = 'Hi ' + first + '. You can change any of this later in Settings.';
-    watchBuild();
-    setTimeout(() => show(3), 700);
-  }
-
-  // Sign in on the school's real page, in its own window; Semester makes the token.
-  const showPaste = () => { $('pasteBox').hidden = false; $('showPaste').hidden = true; };
-  async function startSignin() {
-    const st = $('signStatus'), btn = $('signin');
-    btn.disabled = true;
-    setStatus(st, '<span class="spin"></span>Finish signing in, in the window that just opened.');
-    let d = {};
-    try { d = await post('/api/signin/start', { base_url: baseUrl || $('url').value.trim() }); } catch (e) {}
-    if (!d.ok) { btn.disabled = false; setStatus(st, esc(d.error || OFFLINE), 'bad'); showPaste(); return; }
-    const waitingSince = Date.now();
-    const poll = setInterval(async () => {
-      if (Date.now() - waitingSince > 20000) $('signinContinue').hidden = false;  // for schools that end on their own page
-      let s = {};
-      try { s = await (await fetch('/api/signin/status', { cache: 'no-store' })).json(); } catch (e) { return; }
-      if (s.state === 'waiting') return;
-      clearInterval(poll); btn.disabled = false;
-      $('signinContinue').hidden = true;
-      if (s.state === 'done') return connected(st, s.name);
-      if (s.state === 'closed') return setStatus(st, 'The sign-in window was closed. Try again when you’re ready.');
-      setStatus(st, esc(s.error || 'Sign-in didn’t work.'), 'bad');
-      showPaste();  // offer the other way right away
-    }, 1000);
-  }
-  $('signin').addEventListener('click', startSignin);
-  $('signinContinue').addEventListener('click', async () => {
-    $('signinContinue').hidden = true;
-    setStatus($('signStatus'), '<span class="spin"></span>Taking you back to Canvas…');
-    try { await post('/api/signin/continue', {}); } catch (e) {}
-  });
-  $('showPaste').addEventListener('click', () => { showPaste(); $('token').focus(); });
-  if (SIGNIN) {
-    $('signinBox').hidden = false; $('pasteBox').hidden = true;
-    $('tokenFine').textContent = 'Your password goes only to your school. Semester saves an access token on this computer.';
-  }
-
-  let tokTimer = null, lastTok = '';
-  async function checkToken() {
-    const t = $('token').value.trim(), st = $('tokStatus');
-    if (t.length < 20 || t === lastTok) return;
-    lastTok = t; setStatus(st, CHECKING);
-    try {
-      const d = REAUTH ? await post('/api/reauth', { token: t })
-                       : await post('/api/save', { base_url: baseUrl, token: t, accent });
-      if (!d.ok) { setStatus(st, esc(d.error || 'That token didn’t work. Copy it again.'), 'bad'); return; }
-      connected(st, d.name);
-    } catch (e) { lastTok = ''; setStatus(st, OFFLINE, 'bad'); }
-  }
-  $('token').addEventListener('input', e => { clearTimeout(tokTimer);
-    tokTimer = setTimeout(checkToken, e.inputType === 'insertFromPaste' ? 0 : 350); });
-  $('token').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(tokTimer); lastTok = ''; checkToken(); } });
-
-  // Courses load in the background while they pick a look.
-  let ready = false;
-  async function watchBuild() {
-    const st = $('buildStatus');
-    setStatus(st, '<span class="spin"></span>Loading your courses…');
-    for (;;) {
-      let s = {};
-      try { s = await (await fetch('/api/status', { cache: 'no-store' })).json(); } catch (e) {}
-      if (s.status === 'done') { ready = true; setStatus(st, 'Your courses are ready.', 'ok'); return; }
-      if (s.status === 'error' || s.status === 'expired') { ready = true; setStatus(st, ''); return; }  // the dashboard explains it
-      await new Promise(r => setTimeout(r, 1000));
-    }
-  }
-  $('finish').addEventListener('click', async () => {
-    const btn = $('finish'), remind = $('remind').checked;
-    try {
-      localStorage.setItem('semester.theme', theme); localStorage.setItem('semester.accent', accent);
-      localStorage.setItem('semester.bgNotify', remind ? 'on' : 'off');
-    } catch (e) {}
-    btn.disabled = true; btn.textContent = ready ? 'Opening…' : 'Finishing up…';
-    try { await post('/api/prefs', { accent }); } catch (e) {}
-    if (remind) { try { await post('/api/notify', { enabled: true, interval: 60 }); } catch (e) {} }
-    const t0 = Date.now();
-    while (!ready && Date.now() - t0 < 20000) await new Promise(r => setTimeout(r, 300));
-    location.href = '/';
-  });
-
-  if (REAUTH) {
-    $('reauthNote').hidden = false; $('tokenLead').hidden = true; $('tokenHead').textContent = 'Reconnect to Canvas';
-    $('back').hidden = true; dotsBox.hidden = true;
-    show(2);
-  } else {
-    show(0);
-    if ($('url').value.trim()) checkUrl();  // re-running setup: verify the saved school up front
-  }
-</script>
-</body></html>"""
+# The setup wizard markup now lives in static/setup.html, so it can be linted and
+# formatted like the dashboard. Loaded per call, the same way render_html loads app.js.
 
 
 def with_banner(html, message, label, href):
@@ -622,7 +230,7 @@ def setup_html(reauth=False, base_url=""):
     """The setup wizard. In reauth mode it jumps straight to the token step,
     explains that the old token expired, and pre-fills the school URL."""
     url = (base_url or "").replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
-    html = SETUP_HTML.replace("__URL__", url)
+    html = cp._load_static("setup.html").replace("__URL__", url)
     if reauth:
         html = html.replace("<script>", "<script>window.__REAUTH__ = true;", 1)
     if signin_available():
@@ -772,34 +380,7 @@ def auto_refresh_loop():
 SIGNIN = {"state": "idle", "name": None, "error": None}  # idle | waiting | done | closed | error
 SIGNIN_NUDGE = threading.Event()  # set by "Already signed in? Continue" in setup
 
-CREATE_TOKEN_JS = r"""(function () {
-  window.__semesterResult = '';
-  var m = document.cookie.match(/(?:^|;\s*)_csrf_token=([^;]+)/);
-  function ask(days) {
-    var tok = { purpose: 'Semester' };
-    if (days) tok.expires_at = new Date(Date.now() + days * 864e5 - 36e5).toISOString();
-    return fetch('/api/v1/users/self/tokens', { method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
-                 'X-CSRF-Token': m ? decodeURIComponent(m[1]) : '' },
-      body: JSON.stringify({ token: tok }) })
-    .then(function (r) { return r.text().then(function (t) {
-      var j = {}; try { j = JSON.parse(t.replace(/^while\(1\);/, '')); } catch (e) {}
-      return { status: r.status, j: j, msg: t };  // Canvas sends errors as a bare list: [{"message": "Expiration date is required"}]
-    }); });
-  }
-  // No expiry if the school allows it; otherwise the longest it allows (4cd requires one, max 90 days).
-  ask(0).then(function (a) {
-    if (a.status !== 400 || !/expir/i.test(a.msg)) return a;
-    var cap = a.msg.match(/(\d+)\s*days/);
-    return ask(cap ? +cap[1] : 90);
-  }).then(function (a) {
-    window.__semesterResult = JSON.stringify({ status: a.status, token: a.j.visible_token || a.j.token || null,
-                                               id: a.j.id || null, expires_at: a.j.expires_at || null,
-                                               blocked: /not authorized|unauthorized/i.test(a.msg)
-                                                        && !/unauthenticated|authorization required/i.test(a.msg) });
-  }).catch(function () { window.__semesterResult = JSON.stringify({ status: 0, token: null }); });
-  return 'started';
-})()"""
+# The token-creation script the sign-in window runs: static/create_token.js
 
 
 # Tokens Semester makes itself carry an id and an expiry, so it can renew them before they run out.
@@ -926,7 +507,7 @@ def _signin_flow(base_url):
                 continue
             SIGNIN_NUDGE.clear()
             if time.time() - asked_at > 3:  # on Canvas: ask for a token; "not signed in yet" just means wait
-                win.evaluate_js(CREATE_TOKEN_JS)
+                win.evaluate_js(cp._load_static("create_token.js"))
                 asked_at = time.time()
                 continue
             raw = win.evaluate_js("window.__semesterResult || ''")
@@ -1365,7 +946,14 @@ def selfcheck():
         html = cp.render_html(items, cp.workload_warnings(items, now, threshold=2), courses, [], colors, now)
         assert "<html" in html and "Week board" in html and len(html) > 20_000, "page came out wrong"
         cp.write_text("semester-selfcheck.html", html)   # the app's own writer, not a tidier one
-        print(f"selfcheck ok — {len(html) // 1024} KB")
+
+        # The setup screen and the sign-in script are bundled files too, and setup is the first
+        # thing a new user sees. Draw them here so a bundling miss fails CI, not an install.
+        setup = setup_html()
+        assert '<html' in setup and 'id="token"' in setup and len(setup) > 10_000, "setup page came out wrong"
+        assert 'users/self/tokens' in cp._load_static("create_token.js"), "sign-in script came out wrong"
+
+        print(f"selfcheck ok — {len(html) // 1024} KB page, {len(setup) // 1024} KB setup")
         return 0
     except Exception as e:
         print(f"selfcheck FAILED: {type(e).__name__}: {e}")
