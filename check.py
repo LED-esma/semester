@@ -325,32 +325,119 @@ def _desc_sanitized():
     return f"{len(attacks)} payloads blocked, formatting kept, wired into the page"
 
 
-@check("the data endpoint matches the page")
+@check("the page's data describes the whole dashboard")
 def _page_data_endpoint():
-    """/api/data serves what a second client reads. The dashboard still gets the same data
-    embedded in the page, so the two must not drift: this renders a page, captures what
-    render_html handed out, and compares them key by key."""
+    """The page no longer ships pre-drawn panels: it ships this payload and views.js draws
+    from it, and /api/data hands the same object to anything that is not the page. So the
+    payload IS the dashboard, and a missing piece here is a blank tab rather than a stack
+    trace. Check what the page promises the browser it will find."""
     now = datetime.now(timezone.utc)
     items = cp.demo_items(now)
     names = sorted({i["course"] for i in items})
     colors = {n: cp.COURSE_PALETTE[k % len(cp.COURSE_PALETTE)] for k, n in enumerate(names)}
     crs = [{"name": n, "url": "#", "syllabus_url": "#", "syllabus": "", "pending": 1} for n in names]
+    ann = [{"course": names[0], "title": "Welcome", "url": "#", "posted": now.isoformat(), "preview": "Hi."}]
 
     out = {}
-    page = cp.render_html(items, cp.workload_warnings(items, now, threshold=2), crs, [], colors, now,
+    page = cp.render_html(items, cp.workload_warnings(items, now, threshold=2), crs, ann, colors, now,
                           data_out=out)
 
-    for key in ("generated", "items", "kanban", "grades", "classes", "courses"):
-        assert key in out, f"the endpoint payload is missing {key!r}"
+    for key in ("generated", "built", "updated", "version", "accent", "buckets", "counts",
+                "items", "kanban", "grades", "classes", "courses", "announcements",
+                "courseCards", "warnings"):
+        assert key in out, f"the payload is missing {key!r}"
 
-    tags = {"itemdata": "items", "kanbandata": "kanban", "gradesdata": "grades", "classesdata": "classes"}
-    for tag, key in tags.items():
-        m = re.search(r'<script type="application/json" id="%s">(.*?)</script>' % tag, page, re.S)
-        assert m, f"the page no longer embeds {tag}"
-        assert json.loads(m.group(1)) == out[key], f"{key} differs between the page and the endpoint"
+    # The page carries the endpoint's object verbatim — not a second copy built another way.
+    m = re.search(r'<script type="application/json" id="pagedata">(.*?)</script>', page, re.S)
+    assert m, "the page no longer embeds its data"
+    assert json.loads(m.group(1)) == out, "the page and the endpoint disagree"
 
-    assert out["items"], "no items reached the endpoint"
-    return f"{len(out['items'])} items, {len(out['kanban'])} on the board, identical to the page"
+    # Nothing left half-substituted, or the browser gets a literal __JS__ where a script goes.
+    for hole in ("__CSS__", "__JS__", "__DATA__", "__ACCENT__", "__PAGE_BUILT__", "__COURSES__"):
+        assert hole not in page, f"{hole} was never filled in"
+    for must in ('id="pagedata"', "function renderViews", "function startApp(",
+                 'id="todo"', 'id="disc"', 'id="ann"', 'id="crs"'):
+        assert must in page, f"the page is missing {must!r}"
+
+    # Every card the board draws must point at an item that is really there.
+    for k in out["kanban"]:
+        assert 0 <= k["did"] < len(out["items"]), f"{k['title']!r} points past the end of the list"
+        assert out["items"][k["did"]]["uid"] == k["uid"], f"{k['title']!r} points at the wrong item"
+
+    buckets = {b[0] for b in out["buckets"]}
+    for it in out["items"]:
+        assert it["bucket"] in buckets, f"{it['title']!r} is in unknown group {it['bucket']!r}"
+        assert it["bucket"] != "overdue", f"{it['title']!r} is overdue and should not be here"
+
+    c = out["counts"]
+    assert c["todo"] == sum(1 for i in out["items"] if not i["submitted"]), "the to-do count is wrong"
+    assert c["disc"] == sum(1 for i in out["items"]
+                            if i["graded"] and i["type"] == "discussion" and not i["submitted"]), \
+        "the discussions count is wrong"
+    assert c["ann"] == len(out["announcements"]), "the announcements count is wrong"
+    assert c["crs"] == len(out["courseCards"]), "the courses count is wrong"
+
+    # The unit is added where the number is shown, so the field must not already carry one.
+    for it in out["items"]:
+        assert " pts" not in it["points"], f"{it['title']!r} carries its unit into the payload"
+
+    assert out["items"], "no items reached the page"
+    return f"{len(out['items'])} items, {len(out['kanban'])} on the board, 15 keys, counts agree"
+
+
+@check("Canvas links can't run scripts")
+def _links_guarded():
+    """A link from Canvas becomes an href directly. The HTML sanitizer never sees one — it only
+    handles assignment descriptions — so nothing else stands between a teacher-editable field and
+    the page. Feed every route a URL takes into the payload a javascript: URL, including the class
+    pages, whose data is passed straight through from build_classes."""
+    now = datetime.now(timezone.utc)
+    evil = "javascript:alert(1)"
+    items = cp.demo_items(now)
+    for it in items:
+        it["url"] = evil
+    names = sorted({i["course"] for i in items})
+    colors = {n: cp.COURSE_PALETTE[k % len(cp.COURSE_PALETTE)] for k, n in enumerate(names)}
+    good = "https://dvc.instructure.com/courses/1/discussion_topics/2?x=1#reply"
+    ann = [{"course": names[0], "title": "Welcome", "url": good,
+            "posted": now.isoformat(), "preview": "Hi."}]
+    crs = [{"name": n, "url": evil, "syllabus_url": evil, "syllabus": "", "pending": 1,
+            "modules": [{"name": "Week 1", "items": [{"title": "Reading", "url": evil}]}],
+            "files": [{"name": "syllabus.pdf", "url": evil}],
+            "pages": [{"title": "Notes", "url": evil}]} for n in names]
+    classes = [{"id": 1, "name": names[0], "url": evil,
+                "stream": [{"title": "Post", "posted": now.isoformat(), "preview": "x", "url": evil}],
+                "modules": [{"name": "M", "items": [{"title": "t", "type": "Page", "url": evil}]}],
+                "quizzes": [{"title": "Q", "points": 5, "url": evil}],
+                "pages": [{"title": "P", "url": evil}],
+                "files": [{"name": "f.pdf", "url": evil, "size": 10}],
+                "grades": []}]
+
+    out = {}
+    page = cp.render_html(items, [], crs, ann, colors, now, grades=[], classes=classes, data_out=out)
+
+    def links(v, path="payload"):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k.lower().endswith("url") and isinstance(x, str):
+                    yield f"{path}.{k}", x
+                else:
+                    yield from links(x, f"{path}.{k}")
+        elif isinstance(v, list):
+            for i, x in enumerate(v):
+                yield from links(x, f"{path}[{i}]")
+
+    found = list(links(out))
+    assert found, "no link fields found — this check would pass on an empty payload"
+    bad = [f"{p}={u!r}" for p, u in found
+           if u.lower().startswith(("javascript:", "data:", "vbscript:"))]
+    assert not bad, "a script URL survived -> " + "; ".join(bad)
+    assert "javascript:" not in page, "a script URL reached the page some other way"
+
+    # ...and a real Canvas link still works, query string, fragment and all. A guard that
+    # blocks everything would pass every assertion above and ship a dashboard of dead links.
+    assert out["announcements"][0]["url"] == good,         f"a normal link was mangled -> {out['announcements'][0]['url']!r}"
+    return f"{len(found)} link fields guarded, real links intact"
 
 
 @check("the setup screen renders from its file")
@@ -462,6 +549,20 @@ def _secrets():
     assert not hits, "possible token committed -> " + ", ".join(hits)
     return f"{len(tracked)} files clean"
 
+
+@check("the page's own files are committed")
+def _static_tracked():
+    """static/dashboard.html was invisible to git for a minute: .gitignore said "dashboard.html",
+    meaning the generated page, and quietly matched the template it is generated from too. Nothing
+    fails locally when that happens — the file is right there — and the release is broken instead.
+    Everything the page is built from has to be a file a fresh clone gets."""
+    tracked = set(subprocess.run(["git", "ls-files"], cwd=HERE, capture_output=True, text=True).stdout.split())
+    if not tracked:
+        return "not a git checkout, skipped"
+    needed = ["static/" + n for n in os.listdir(os.path.join(HERE, "static"))]
+    missing = [rel for rel in needed if rel not in tracked]
+    assert not missing, "bundled but not committed -> " + ", ".join(missing)
+    return f"{len(needed)} bundled files, all tracked"
 
 # ---------------------------------------------------------------- plumbing
 

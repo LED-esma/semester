@@ -435,6 +435,24 @@ def _safe_url(u):
     return v
 
 
+def _safe_links(value):
+    """Run every URL in the payload through _safe_url, wherever it sits.
+
+    A link from Canvas goes straight into an href without meeting the HTML sanitizer, which
+    only ever sees assignment descriptions. Course names, module items, files and announcements
+    are teacher-editable fields on a school's own site, so this is the difference between
+    "unlikely" and "cannot". Keyed on the field name rather than a list of paths, so a URL added
+    to the payload later is covered the day it appears instead of the day someone remembers it.
+    """
+    if isinstance(value, dict):
+        return {k: (_safe_url(v) if k.lower().endswith("url") and isinstance(v, str)
+                    else _safe_links(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [_safe_links(v) for v in value]
+    return value
+
+
 class _Sanitizer(_HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -959,7 +977,7 @@ def build_ics(days_back=7):
 # --------------------------------------------------------------------------- #
 # Dashboard
 # --------------------------------------------------------------------------- #
-# Overdue items are intentionally excluded from the planner (see render_html).
+# Overdue items are intentionally excluded from the planner (see _page_payload).
 BUCKET_META = [
     ("today", "Due Today", "#f97316"),
     ("week", "This Week", "#eab308"),
@@ -1008,419 +1026,137 @@ def _load_static(name):
         return f.read()
 
 
-def render_html(items, warnings, courses_info, announcements, colors, now, accent="#6366f1", grades=None, classes=None, data_out=None):
-    # Overdue items are removed from the planner entirely.
+def _page_payload(items, warnings, courses_info, announcements, colors, now,
+                  accent="#6366f1", grades=None, classes=None):
+    """Everything a dashboard is, as one document.
+
+    The page embeds this and /api/data serves it, so there is one description of a semester
+    rather than one for the screen and another for everything else. Dates are formatted here,
+    because strf() is the only place that knows how to drop a leading zero on Windows too.
+    """
+    # Overdue items are left out of the planner entirely.
     pending = [i for i in items if not i["submitted"] and i["bucket"] != "overdue"]
-    done = sum(1 for i in items if i["submitted"])
-
-    cards_by_bucket = {b: [] for b, _, _ in BUCKET_META}
-    for it in sorted(pending, key=lambda x: (x["due"] is None, x["due"] or "")):
-        cards_by_bucket[it["bucket"]].append(it)
-
-    def dot(course):
-        return f'<span class="dot" style="background:{colors.get(course, "#888")}"></span>'
-
-    # Detail registry: each card gets an id; JS opens a popup with these fields.
-    details = []
-
-    def reg(it):
-        details.append({
-            "title": it["title"],
-            "course": clean_course_name(it["course"]),
-            "type": it["type"],
-            "due": fmt_due(it.get("due")),
-            "dueIso": it.get("due"),          # for filtering by due date
-            "color": colors.get(it["course"], "#6366f1"),
-            "start": fmt_start(it.get("start")),
-            "points": (f'{it["points"]:g} pts' if it.get("points") else ""),
-            "url": it.get("url") or "#",
-            "desc": sanitize_html(it.get("description")),
-            "score": it.get("score"),
-            "comments": it.get("comments") or [],
-            "rubric": [r for r in (it.get("rubric") or []) if r.get("points") is not None or r.get("comment")],
-            "subTypes": it.get("submission_types") or [],
-            "courseId": it.get("course_id"),
-            "assignId": it.get("assign_id"),
-            "submitted": it.get("submitted", False),
-            "uid": it.get("uid"),
-            "note": it.get("note", ""),
-        })
-        return len(details) - 1
-
-    # ---- Tab 1: To-Do ----
-    warn_html = ""
-    if warnings:
-        rows = "".join(
-            f"<li><b>{strf(datetime.fromisoformat(d), '%a %b %-d')}</b> — {n} things due</li>"
-            for d, n in warnings
-        )
-        warn_html = f'<div class="warn"><h3>Heavy days ahead — start early</h3><ul>{rows}</ul></div>'
-
-    todo = ""
-    for bucket, label, color in BUCKET_META:
-        cards = cards_by_bucket[bucket]
-        if not cards:
-            continue
-        cell = ""
-        for it in cards:
-            pts = f'<span class="pts">{it["points"]:g} pts</span>' if it.get("points") else ""
-            start = fmt_start(it.get("start"))
-            start_html = f'<span class="start">start {start}</span>' if start and bucket in ("week", "later") else ""
-            cell += f"""
-            <div class="card" data-id="{reg(it)}" style="border-left-color:{colors.get(it['course'],'#555')}">
-              <div class="card-top"><span class="course">{dot(it['course'])}{_esc(clean_course_name(it['course']))}</span>{pts}</div>
-              <div class="title">{_esc(it['title'])}</div>
-              <div class="card-bot"><span class="due">{fmt_due(it.get('due'))}</span>{start_html}</div>
-            </div>"""
-        todo += f'<section><h2 style="color:{color}">{label} <span class="count">{len(cards)}</span></h2><div class="grid">{cell}</div></section>'
-    todo = todo or '<p class="empty">Nothing pending.</p>'
-
-    # ---- Tab 2: Graded Discussions (excluding overdue) ----
     graded = [i for i in items if i["type"] == "discussion"
               and i.get("points") is not None and i["bucket"] != "overdue"]
-    graded.sort(key=lambda x: (x["submitted"], x["due"] is None, x["due"] or ""))
-    disc = ""
+
+    # One entry per item, not per card: work that shows up on two screens is described once,
+    # and everything else points at it by index.
+    seen, registry = {}, []
+
+    def reg(it):
+        if id(it) not in seen:
+            seen[id(it)] = len(registry)
+            registry.append({
+                "title": it["title"],
+                "course": clean_course_name(it["course"]),
+                "type": it["type"],
+                "due": fmt_due(it.get("due")),
+                "dueIso": it.get("due"),          # for filtering by due date
+                "color": colors.get(it["course"], "#6366f1"),
+                "start": fmt_start(it.get("start")),
+                "points": (f'{it["points"]:g}' if it.get("points") else ""),   # bare; each screen adds the unit
+                "url": it.get("url") or "#",
+                "desc": sanitize_html(it.get("description")),
+                "score": it.get("score"),
+                "comments": it.get("comments") or [],
+                "rubric": [r for r in (it.get("rubric") or []) if r.get("points") is not None or r.get("comment")],
+                "subTypes": it.get("submission_types") or [],
+                "courseId": it.get("course_id"),
+                "assignId": it.get("assign_id"),
+                "submitted": it.get("submitted", False),
+                "uid": it.get("uid"),
+                "note": it.get("note", ""),
+                "bucket": it["bucket"],
+                "graded": it.get("points") is not None,   # a graded discussion belongs on that tab
+            })
+        return seen[id(it)]
+
+    # Registered in reading order: the To-Do tab first, then anything only Discussions shows.
+    by_bucket = {b: [] for b, _, _ in BUCKET_META}
+    for it in sorted(pending, key=lambda x: (x["due"] is None, x["due"] or "")):
+        by_bucket[it["bucket"]].append(it)
+    for bucket, _, _ in BUCKET_META:
+        for it in by_bucket[bucket]:
+            reg(it)
     for it in graded:
-        pts = f'<span class="pts">{it["points"]:g} pts</span>' if it.get("points") else ""
-        check = '<span class="start">Done</span>' if it["submitted"] else ""
-        disc += f"""
-        <div class="card" data-id="{reg(it)}" style="border-left-color:{colors.get(it['course'],'#555')}">
-          <div class="card-top"><span class="course">{dot(it['course'])}{_esc(clean_course_name(it['course']))}</span>{pts}</div>
-          <div class="title">{_esc(it['title'])}</div>
-          <div class="card-bot"><span class="due">{fmt_due(it.get('due'))}</span>{check}</div>
-        </div>"""
-    disc = f'<div class="grid">{disc}</div>' if disc else '<p class="empty">No graded discussions.</p>'
-    n_disc_todo = sum(1 for i in graded if not i["submitted"])
+        reg(it)
 
-    # ---- Tab 3: Announcements ----
-    ann = ""
-    for a in announcements:
-        prev = _esc(a["preview"]).replace("\n", "<br>")
-        ann += f"""
-        <a class="ann" href="{_esc(a.get('url') or '#')}" target="_blank" style="border-left-color:{colors.get(a['course'],'#555')}">
-          <div class="card-top"><span class="course">{dot(a['course'])}{_esc(clean_course_name(a['course']))}</span><span class="date">{fmt_posted(a.get('posted'))}</span></div>
-          <div class="title">{_esc(a['title'])}</div>
-          <div class="prev">{prev}</div>
-        </a>"""
-    ann = ann or '<p class="empty">No recent announcements.</p>'
+    kanban = [{
+        "uid": it["uid"],
+        "did": reg(it),
+        "title": it["title"],
+        "course": clean_course_name(it["course"]),
+        "color": colors.get(it["course"], "#6366f1"),
+        "due": it["due"],
+        "start": it["start"],
+        "approx": it.get("due_approx", False),
+        "dueLabel": fmt_start(it["due"]),
+        "points": (f'{it["points"]:g}' if it.get("points") else ""),
+        "type": it["type"],
+    } for it in items if not it["submitted"] and it["bucket"] != "overdue"]
 
-    # ---- Tab 3: Courses / Syllabus / Modules / Files / Pages ----
-    def _linklist(rows):
-        return "".join(f'<li><a href="{_esc(u)}" target="_blank">{_esc(t or "(untitled)")}</a></li>' for t, u in rows if u)
-
-    crs = ""
-    for c in courses_info:
-        col = colors.get(c["name"], "#888")
-        syl = _esc(c["syllabus"]).replace("\n", "<br>") if c["syllabus"] else "<i>No syllabus text posted — open the course to view.</i>"
-        mod_html = ""
-        for m in c.get("modules", []):
-            items_html = _linklist((it.get("title"), it.get("url")) for it in m.get("items", []))
-            mod_html += f'<li class="modname">{_esc(m.get("name") or "Module")}</li>{items_html}'
-        files_html = _linklist((f.get("name"), f.get("url")) for f in c.get("files", []))
-        pages_html = _linklist((p.get("title"), p.get("url")) for p in c.get("pages", []))
-        extra = ""
-        if mod_html:
-            extra += f'<details><summary>Modules ({len(c.get("modules", []))})</summary><ul class="clist">{mod_html}</ul></details>'
-        if files_html:
-            extra += f'<details><summary>Files ({len(c.get("files", []))})</summary><ul class="clist">{files_html}</ul></details>'
-        if pages_html:
-            extra += f'<details><summary>Pages ({len(c.get("pages", []))})</summary><ul class="clist">{pages_html}</ul></details>'
-        crs += f"""
-        <div class="course-card" style="border-top:3px solid {col}">
-          <div class="cc-top"><h3>{dot(c['name'])}{_esc(clean_course_name(c['name']))}</h3>
-            <span class="pill">{c['pending']} to do</span></div>
-          <div class="links">
-            <a href="{_esc(c['url'])}" target="_blank">Open course ↗</a>
-            <a href="{_esc(c['syllabus_url'])}" target="_blank">Full syllabus ↗</a>
-          </div>
-          <details><summary>Syllabus preview</summary><div class="syl">{syl}</div></details>
-          {extra}
-        </div>"""
-    crs = crs or '<p class="empty">No courses found.</p>'
-
-    # ---- Grades (rendered client-side for the live what-if projector) ----
-    grades_json = json.dumps([{**g, "color": colors.get(g["name"], "#888"),
-                               "cleanName": clean_course_name(g["name"])} for g in (grades or [])],
-                             ensure_ascii=False).replace("</", "<\\/")
-
-    # ---- Week board (kanban) data: every pending, non-overdue item ----
-    kanban = []
-    for it in items:
-        if it["submitted"] or it["bucket"] == "overdue":
-            continue
-        kanban.append({
-            "uid": it["uid"],
-            "did": reg(it),
-            "title": it["title"],
-            "course": clean_course_name(it["course"]),
-            "color": colors.get(it["course"], "#6366f1"),
-            "due": it["due"],
-            "start": it["start"],
-            "approx": it.get("due_approx", False),
-            "dueLabel": fmt_start(it["due"]),
-            "points": (f'{it["points"]:g}' if it.get("points") else ""),
-            "type": it["type"],
-        })
-    kanban_json = json.dumps(kanban, ensure_ascii=False).replace("</", "<\\/")
-    classes_json = json.dumps(classes or [], ensure_ascii=False).replace("</", "<\\/")
-
-    courses_compact = json.dumps([{"id": c.get("id"), "name": clean_course_name(c["name"])}
-                                  for c in courses_info], ensure_ascii=False).replace("</", "<\\/")
+    return _safe_links({
+        "generated": now.isoformat(),
+        "built": int(now.timestamp()),
+        "updated": strf(now.astimezone(), "%A, %B %-d at %-I:%M %p"),
+        "version": VERSION,
+        "accent": accent,
+        "buckets": [list(b) for b in BUCKET_META],
+        "counts": {
+            "todo": len(pending),
+            "week": len(by_bucket["today"]) + len(by_bucket["week"]),
+            "disc": sum(1 for i in graded if not i["submitted"]),
+            "done": sum(1 for i in items if i["submitted"]),
+            "ann": len(announcements),
+            "crs": len(courses_info),
+            "classes": len(classes or []),
+        },
+        "items": registry,
+        "kanban": kanban,
+        "grades": [{**g, "color": colors.get(g["name"], "#888"),
+                    "cleanName": clean_course_name(g["name"])} for g in (grades or [])],
+        "classes": classes or [],
+        "courses": [{"id": c.get("id"), "name": clean_course_name(c["name"])} for c in courses_info],
+        "announcements": [{
+            "course": clean_course_name(a["course"]),
+            "color": colors.get(a["course"], "#555"),
+            "title": a["title"],
+            "url": a.get("url") or "#",
+            "preview": a["preview"],
+            "postedLabel": fmt_posted(a.get("posted")),
+        } for a in announcements],
+        "courseCards": [{
+            "name": clean_course_name(c["name"]),
+            "color": colors.get(c["name"], "#888"),
+            "url": c["url"],
+            "syllabusUrl": c["syllabus_url"],
+            "syllabus": c["syllabus"],
+            "pending": c["pending"],
+            "modules": [{"name": m.get("name"),
+                         "items": [{"title": i.get("title"), "url": i.get("url")}
+                                   for i in m.get("items", [])]} for m in c.get("modules", [])],
+            "files": [{"title": f.get("name"), "url": f.get("url")} for f in c.get("files", [])],
+            "pages": [{"title": p.get("title"), "url": p.get("url")} for p in c.get("pages", [])],
+        } for c in courses_info],
+        "warnings": [{"label": strf(datetime.fromisoformat(d), "%a %b %-d"), "n": n}
+                     for d, n in warnings],
+    })
 
 
-    # Embed per-card details for the popup (escape </ so it can't break out of the tag).
-    data_json = json.dumps(details, ensure_ascii=False).replace("</", "<\\/")
-
+def render_html(items, warnings, courses_info, announcements, colors, now, accent="#6366f1", grades=None, classes=None, data_out=None):
+    """The dashboard: the static shell from static/dashboard.html, this build's data, and the
+    scripts that draw one from the other. The markup itself lives in static/, not in here."""
+    payload = _page_payload(items, warnings, courses_info, announcements, colors, now,
+                            accent, grades, classes)
     if data_out is not None:
-        # Read back the same strings the page embeds, rather than rebuilding the values, so
-        # /api/data and the dashboard can never drift apart.
-        data_out.update({
-            "generated": now.isoformat(),
-            "items": json.loads(data_json),
-            "kanban": json.loads(kanban_json),
-            "grades": json.loads(grades_json),
-            "classes": json.loads(classes_json),
-            "courses": json.loads(courses_compact),
-        })
+        data_out.update(payload)
 
-    css = _load_static("style.css").replace("__ACCENT__", accent)
-    js = (_load_static("app.js")
-          .replace("__PAGE_BUILT__", str(int(now.timestamp())))
-          .replace("__COURSES__", courses_compact))
-
-    return f"""<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Semester</title>
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230a0a0c"/><text x="50" y="54" font-family="Helvetica,Arial,sans-serif" font-size="74" font-weight="700" fill="white" text-anchor="middle" dominant-baseline="central">S</text></svg>'>
-<style>
-{css}
-</style>
-<script>try{{var t=localStorage.getItem('semester.theme')||'system';var dark=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);if(dark)document.documentElement.classList.add('dark');var a=localStorage.getItem('semester.accent');if(a)document.documentElement.style.setProperty('--accent',a);}}catch(e){{}}</script>
-</head>
-<body>
-<div class="app">
-  <aside class="rail">
-    <div class="brand">Semester</div>
-    <nav class="navlist">
-      <button class="nav active" data-p="week"><span>Week board</span></button>
-      <button class="nav" data-p="classes"><span>Classes</span><b class="badge">{len(classes or [])}</b></button>
-      <button class="nav" data-p="todo"><span>To-Do</span><b class="badge">{len(pending)}</b></button>
-      <button class="nav" data-p="disc"><span>Discussions</span><b class="badge">{n_disc_todo}</b></button>
-      <button class="nav" data-p="ann"><span>Announcements</span><b class="badge">{len(announcements)}</b></button>
-      <button class="nav" data-p="crs"><span>Courses</span><b class="badge">{len(courses_info)}</b></button>
-      <button class="nav" data-p="grades"><span>Grades</span></button>
-      <button class="nav" data-p="inbox"><span>Inbox</span></button>
-    </nav>
-    <div class="railbottom">
-      <button class="nav" data-p="settings"><span>Settings</span></button>
-    </div>
-  </aside>
-  <main class="content">
-    <div class="pagehead"><h1 id="pageTitle">Week board</h1>
-      <div class="searchwrap"><input id="globalSearch" type="search" placeholder="Search everything…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="searchSuggest" aria-expanded="false"><ul class="suggest" id="searchSuggest" role="listbox" hidden></ul></div>
-      <div class="updated">Updated {strf(now.astimezone(), '%A, %B %-d at %-I:%M %p')}</div></div>
-    <div class="stats">
-      <div class="stat"><b>{len(pending)}</b><span>to do</span></div>
-      <div class="stat"><b>{len(cards_by_bucket['today']) + len(cards_by_bucket['week'])}</b><span>due this week</span></div>
-      <div class="stat"><b>{n_disc_todo}</b><span>discussions</span></div>
-      <div class="stat"><b>{done}</b><span>done</span></div>
-    </div>
-    <div class="filterbar" id="filterBar">
-      <div class="chips" id="courseChips"></div>
-      <select id="fType" aria-label="Type"><option value="all">All types</option><option value="assignment">Assignments</option><option value="quiz">Quizzes</option><option value="discussion">Discussions</option></select>
-      <select id="fDue" aria-label="Due date"><option value="any">Any due date</option><option value="today">Due today</option><option value="week">Due in 7 days</option><option value="2weeks">Due in 14 days</option><option value="nodate">No due date</option></select>
-      <select id="fStatus" aria-label="Status"><option value="all">To do and done</option><option value="todo">To do</option><option value="done">Done</option></select>
-      <button class="ghostbtn" id="fClear" hidden>Clear filters</button>
-    </div>
-    <div class="panel active" id="week">
-      <div class="upnext" id="upnext"></div>
-      <div class="controls">
-        <span class="autolabel">Auto-schedule</span>
-        <select id="autoAlgo">
-          <option value="balanced">Balanced load</option>
-          <option value="deadline">Deadline-first</option>
-          <option value="front">Front-load</option>
-          <option value="jit">Just-in-time</option>
-        </select>
-        <button class="dlbtn" id="autoBtn">Plan my week</button>
-        <button class="ghostbtn" id="clearPlan">Clear</button>
-      </div>
-      <div class="controls">
-        <label class="sortbox">Sort by
-          <select id="traySort">
-            <option value="due">Due date</option>
-            <option value="points">Points (high→low)</option>
-            <option value="course">Course</option>
-            <option value="title">Name (A→Z)</option>
-          </select>
-        </label>
-      </div>
-      <div class="board" id="weekboard"></div>
-      <div class="tray-label">Unscheduled</div>
-      <div class="tray" id="weektray"></div>
-    </div>
-    <div class="panel" id="classes"><div id="classView"></div></div>
-  <div class="panel" id="todo">{warn_html}{todo}</div>
-    <div class="panel" id="disc">{disc}</div>
-    <div class="panel" id="ann">{ann}</div>
-    <div class="panel" id="crs">{crs}</div>
-    <div class="panel" id="grades"><div id="gradesBox"></div></div>
-    <div class="panel" id="inbox">
-      <div class="inbox-top"><button class="dlbtn" id="composeBtn">New message</button>
-        <button class="ghostbtn" id="inboxRefresh">Refresh</button></div>
-      <div id="inboxBox"><p class="empty">Loading messages…</p></div>
-    </div>
-    <div class="panel" id="settings">
-      <div class="setgroup" id="accountGroup" style="display:none">
-        <h2>Account</h2>
-        <div class="setrow"><div><div class="st" id="acctName">Canvas account</div><div class="sd" id="acctSchool"></div></div>
-          <button class="ghostbtn" id="logoutBtn">Log out</button></div>
-      </div>
-      <div class="setgroup">
-        <h2>Appearance</h2>
-        <div class="setrow">
-          <div><div class="st">Theme</div><div class="sd">Light, dark, or match your system.</div></div>
-          <select id="themeSel"><option value="light">Light</option><option value="dark">Dark</option><option value="system">Match system</option></select>
-        </div>
-        <div class="setrow">
-          <div><div class="st">Accent color</div><div class="sd">Buttons, highlights, and the selected tab.</div></div>
-          <input type="color" id="accentInput" value="{accent}">
-        </div>
-      </div>
-      <div class="setgroup">
-        <h2>Week board</h2>
-        <div class="setrow">
-          <div><div class="st">Board view</div><div class="sd">A rolling next-7-days, or the current calendar week.</div></div>
-          <select id="boardView"><option value="rolling">Next 7 days</option><option value="week">This week</option></select>
-        </div>
-        <div class="setrow">
-          <div><div class="st">Week starts on</div><div class="sd">Used when board view is "This week."</div></div>
-          <select id="weekStart"><option value="0">Sunday</option><option value="1">Monday</option></select>
-        </div>
-        <div class="setrow"><div class="st">Show weekends</div><label class="switch"><input type="checkbox" id="weekends"><span class="track"></span></label></div>
-        <div class="setrow">
-          <div><div class="st">Heavy-day threshold</div><div class="sd">Flag a day once this many tasks land on it.</div></div>
-          <input type="number" id="dayThreshold" min="2" max="12">
-        </div>
-      </div>
-      <div class="setgroup">
-        <h2>Planning</h2>
-        <div class="setrow">
-          <div><div class="st">Start-early aggressiveness</div><div class="sd">How far ahead suggested start dates land. Applies in the installed app.</div></div>
-          <select id="aggr"><option value="relaxed">Relaxed</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option></select>
-        </div>
-        <div class="setrow">
-          <div><div class="st">Default tab</div><div class="sd">Which section opens when you launch.</div></div>
-          <select id="defaultTab"><option value="week">Week board</option><option value="todo">To-Do</option><option value="disc">Discussions</option><option value="ann">Announcements</option><option value="crs">Courses</option><option value="grades">Grades</option></select>
-        </div>
-        <div class="setrow">
-          <div><div class="st">Show badge and training courses</div><div class="sd">Orientation badges and compliance trainings are hidden by default. Applies in the installed app.</div></div>
-          <label class="switch"><input type="checkbox" id="showAllCourses"><span class="track"></span></label>
-        </div>
-        <div class="setrow">
-          <div><div class="st">Show tips</div><div class="sd">Short hints that appear once, the first time you use a feature.</div></div>
-          <label class="switch"><input type="checkbox" id="showTips"><span class="track"></span></label>
-        </div>
-      </div>
-      <div class="setgroup">
-        <h2>Updates</h2>
-        <div class="setrow"><div><div class="st">Auto-refresh</div><div class="sd">Checks Canvas for changes every few minutes and whenever you come back, then updates your dashboard. Uses very little data.</div></div>
-          <label class="switch"><input type="checkbox" id="autoOn"><span class="track"></span></label></div>
-      </div>
-      <div class="setgroup">
-        <h2>Notifications</h2>
-        <div class="setrow"><div><div class="st">Due date reminders</div><div class="sd">For work you haven't turned in yet.</div></div>
-          <label class="switch"><input type="checkbox" id="nDue"><span class="track"></span></label></div>
-        <div class="setrow" id="nWhenRow"><div><div class="st">Remind me</div><div class="sd">Pick as many as you like.</div></div>
-          <div class="checks">
-            <label><input type="checkbox" data-when="day_before"> The day before</label>
-            <label><input type="checkbox" data-when="morning"> The morning it's due, at <select id="nMorning"></select></label>
-            <label><input type="checkbox" data-when="hours3"> 3 hours before</label>
-            <div class="chips" id="nCustom"></div>
-            <div class="addtime"><input type="number" id="nAmount" min="1" max="14" value="2" aria-label="How many">
-              <select id="nUnit"><option value="60">hours</option><option value="1440">days</option></select>
-              <button class="ghostbtn" id="nAdd" type="button">Add a time</button></div>
-          </div></div>
-        <div class="setrow"><div class="st">New assignments</div>
-          <label class="switch"><input type="checkbox" id="nNewA"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">New announcements</div>
-          <label class="switch"><input type="checkbox" id="nNewN"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Grades posted</div>
-          <label class="switch"><input type="checkbox" id="nNewG"><span class="track"></span></label></div>
-        <div class="setrow"><div><div class="st">Suggested start days</div><div class="sd">A nudge on the day Semester suggests starting something.</div></div>
-          <label class="switch"><input type="checkbox" id="nStart"><span class="track"></span></label></div>
-        <div class="setrow"><div><div class="st">Quiet hours</div><div class="sd">Nothing arrives overnight. Anything that comes up is held, not lost.</div></div>
-          <label class="switch"><input type="checkbox" id="nQuiet"><span class="track"></span></label></div>
-        <div class="setrow" id="nQuietRow"><div class="st">Quiet from</div>
-          <div class="checks"><label><select id="nQFrom"></select> until <select id="nQTo"></select></label></div></div>
-        <div class="setrow"><div><div class="st">Mute classes</div><div class="sd">Click a class to stop its notifications.</div></div>
-          <div class="chips" id="nMute"></div></div>
-        <div class="setrow"><div><div class="st">Even when Semester is closed</div><div class="sd">Checks Canvas about once an hour in the background (Mac).</div></div>
-          <label class="switch"><input type="checkbox" id="bgNotify"><span class="track"></span></label></div>
-        <div class="setrow"><div><div class="st">Test notification</div><div class="sd">Make sure notifications can reach you.</div></div>
-          <button class="ghostbtn" id="nTest">Send test</button></div>
-      </div>
-      <div class="setgroup">
-        <h2>Sections</h2>
-        <p class="sd" style="margin:0 0 10px">Choose which tabs appear in the sidebar. Week board is always shown.</p>
-        <div class="setrow"><div class="st">To-Do</div><label class="switch"><input type="checkbox" data-tab="todo"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Discussions</div><label class="switch"><input type="checkbox" data-tab="disc"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Announcements</div><label class="switch"><input type="checkbox" data-tab="ann"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Courses</div><label class="switch"><input type="checkbox" data-tab="crs"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Grades</div><label class="switch"><input type="checkbox" data-tab="grades"><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Inbox</div><label class="switch"><input type="checkbox" data-tab="inbox"><span class="track"></span></label></div>
-      </div>
-      <div class="setgroup">
-        <h2>Calendar</h2>
-        <div class="setrow"><div class="st">Include deadlines</div><label class="switch"><input type="checkbox" id="icsDue" checked><span class="track"></span></label></div>
-        <div class="setrow"><div class="st">Include planned work-days</div><label class="switch"><input type="checkbox" id="icsPlan" checked><span class="track"></span></label></div>
-        <div class="setrow" id="icsFeedRow" style="display:none"><div><div class="st">Live calendar feed</div><div class="sd">Subscribe once and your deadlines stay in sync while Semester is running.<span class="feedurl" id="icsFeedUrl"></span></div></div>
-          <button class="ghostbtn" id="icsCopy">Copy URL</button></div>
-        <div class="setrow"><div><div class="st">Export calendar</div><div class="sd">Or download a one-time .ics file to import into Google or Apple Calendar.</div></div>
-          <button class="dlbtn" id="icsExport">Download .ics</button></div>
-      </div>
-      <div class="setgroup">
-        <h2>About</h2>
-        <div class="setrow"><div><div class="st">Check for updates on launch</div><div class="sd">Notify me when a newer version is released.</div></div>
-          <label class="switch"><input type="checkbox" id="autoUpdate"><span class="track"></span></label></div>
-        <div class="setrow"><div><div class="st">Semester {VERSION}</div><div class="sd">Updates keep your settings, plan, and notes.
-          <a href="https://github.com/LED-esma/semester/releases/tag/v{VERSION}" target="_blank">What's new</a> ·
-          <a href="https://github.com/LED-esma/semester" target="_blank">Source code</a></div></div>
-          <button class="ghostbtn" id="checkUpdate">Check now</button></div>
-        <p class="sd" style="margin:10px 0 0">Not affiliated with Instructure. Canvas is a trademark of Instructure, Inc.</p>
-      </div>
-    </div>
-  </main>
-</div>
-
-<div class="modal" id="modal">
-  <div class="modal-box">
-    <button class="modal-x" id="modalX">✕</button>
-    <div class="modal-course" id="mCourse"></div>
-    <h2 id="mTitle"></h2>
-    <div class="modal-meta" id="mMeta"></div>
-    <div class="modal-desc" id="mDesc"></div>
-    <div class="modal-fb" id="mFb"></div>
-    <div class="modal-submit" id="mSubmit"></div>
-    <div class="modal-notes" id="mNotes"></div>
-    <div class="modal-actions" id="mActions"></div>
-    <a class="modal-open" id="mLink" target="_blank">Open in Canvas ↗</a>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-<div class="focusbar" id="focusBar"></div>
-<div class="updbar" id="updBar"></div>
-
-<script type="application/json" id="itemdata">{data_json}</script>
-<script type="application/json" id="kanbandata">{kanban_json}</script>
-<script type="application/json" id="gradesdata">{grades_json}</script>
-<script type="application/json" id="classesdata">{classes_json}</script>
-<script>
-{js}
-</script>
-</body></html>"""
+    # Data goes in last: a course named "__JS__" is a course name, not a placeholder.
+    # Escaping "</" keeps a title containing "</script>" from ending the tag early.
+    return (_load_static("dashboard.html")
+            .replace("__CSS__", _load_static("style.css").replace("__ACCENT__", accent))
+            .replace("__JS__", _load_static("views.js") + "\n" + _load_static("app.js"))
+            .replace("__DATA__", json.dumps(payload, ensure_ascii=False).replace("</", r"<\/")))
 
 
 # --------------------------------------------------------------------------- #

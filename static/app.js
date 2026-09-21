@@ -1,6 +1,9 @@
+// The dashboard itself. It is handed the same payload the page embeds and /api/data
+// serves, so nothing here reads markup to find out what the semester looks like.
+function startApp(D) {
   // Launch sync runs first and stands alone, so an error anywhere below can't block fresh data.
   (function syncOnLaunch() {
-    const BUILT = __PAGE_BUILT__;
+    const BUILT = D.built;
     let touched = false;
     ['pointerdown', 'keydown', 'wheel'].forEach(ev => addEventListener(ev, () => { touched = true; }, { once: true, passive: true }));
     const status = async () => (await fetch('/api/status', { cache: 'no-store' })).json();
@@ -23,7 +26,7 @@
   })();
 
   const TITLES = {week:'Week board', classes:'Classes', todo:'To-Do', disc:'Discussions', ann:'Announcements', crs:'Courses', grades:'Grades', inbox:'Inbox', settings:'Settings'};
-  const COURSES = __COURSES__;
+  const COURSES = D.courses;
   document.querySelectorAll('.nav').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.nav').forEach(x => x.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
@@ -130,7 +133,7 @@
   if (defTab && defTab !== 'week') { const b = document.querySelector('.nav[data-p="' + defTab + '"]');
     if (b && b.style.display !== 'none') b.click(); }
 
-  const DATA = JSON.parse(document.getElementById('itemdata').textContent);
+  const DATA = D.items;
   const modal = document.getElementById('modal');
   function openModal(id) {
     const d = DATA[id]; if (!d) return;
@@ -147,7 +150,7 @@
     let fb = '';
     if (d.score != null || (d.comments && d.comments.length) || (d.rubric && d.rubric.length)) {
       fb += '<div class="fb-h">Feedback</div>';
-      if (d.score != null) fb += '<div class="fb-score">Score: ' + d.score + (d.points ? (' / ' + d.points.replace(' pts', '')) : '') + '</div>';
+      if (d.score != null) fb += '<div class="fb-score">Score: ' + d.score + (d.points ? (' / ' + d.points) : '') + '</div>';
       if (d.rubric && d.rubric.length) {
         fb += '<table class="fb-rub">';
         d.rubric.forEach(r => { fb += '<tr><td>' + esc(r.desc || '') + '</td><td class="gs">' + (r.points != null ? r.points : '—') + (r.max != null ? (' / ' + r.max) : '') + '</td></tr>' + (r.comment ? '<tr><td colspan="2" class="fb-c">' + esc(r.comment) + '</td></tr>' : ''); });
@@ -236,7 +239,7 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
   // ---- Week board (drag-to-reschedule, saved in localStorage) ----
-  const KANBAN = JSON.parse(document.getElementById('kanbandata').textContent);
+  const KANBAN = D.kanban;
   const PLAN_KEY = 'canvasPlannerPlan';
   const HIDE_KEY = 'canvasPlannerHidden';
   const SORT_KEY = 'canvasPlannerSort';
@@ -758,7 +761,7 @@
 
   // ---- Auto-refresh nudge (installed app only; static file just no-ops) ----
   // Fresh data from the background refresh swaps in on its own unless they're in the middle of something.
-  const PAGE_BUILT = __PAGE_BUILT__;
+  const PAGE_BUILT = D.built;
   let lastInput = Date.now(), freshShown = false;
   ['pointerdown', 'keydown', 'wheel'].forEach(ev => addEventListener(ev, () => { lastInput = Date.now(); }, { passive: true }));
   const reloadHere = () => { const n = document.querySelector('.nav.active');
@@ -790,7 +793,7 @@
   // ---- Notifications while the app is open ----
 
   // ---- Grades: live what-if / what-do-I-need projector ----
-  const GRADES = JSON.parse(document.getElementById('gradesdata').textContent);
+  const GRADES = D.grades;
   function projected(course, hypo) {
     if (course.weighted) {
       const groups = {};
@@ -977,7 +980,7 @@
   if (LS.getItem('semester.autoupdate') !== 'off') setTimeout(() => checkUpdate(false), 3000);
 
   // ---- Classes (Google Classroom-style: grid -> class page) ----
-  const CLASSES = JSON.parse(document.getElementById('classesdata').textContent);
+  const CLASSES = D.classes;
   const CLS_PAL = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#8b5cf6'];
   const clsColor = i => CLS_PAL[i % CLS_PAL.length];
   const ICON = { Assignment: 'Assignment', Quiz: 'Quiz', Discussion: 'Discussion', Page: 'Page', File: 'File', ExternalUrl: 'Link', ExternalTool: 'Tool' };
@@ -1092,4 +1095,5 @@ if (searchBox) {
     else if (e.key === 'Escape') { sugs = []; drawSuggest(); }
   });
   searchBox.addEventListener('blur', () => setTimeout(() => { sugs = []; drawSuggest(); }, 150));
+}
 }

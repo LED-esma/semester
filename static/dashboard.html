@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Semester</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230a0a0c"/><text x="50" y="54" font-family="Helvetica,Arial,sans-serif" font-size="74" font-weight="700" fill="white" text-anchor="middle" dominant-baseline="central">S</text></svg>'>
+<style>
+__CSS__
+</style>
+<script>try{var t=localStorage.getItem('semester.theme')||'system';var dark=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);if(dark)document.documentElement.classList.add('dark');var a=localStorage.getItem('semester.accent');if(a)document.documentElement.style.setProperty('--accent',a);}catch(e){}</script>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">Semester</div>
+    <nav class="navlist">
+      <button class="nav active" data-p="week"><span>Week board</span></button>
+      <button class="nav" data-p="classes"><span>Classes</span><b class="badge" data-count="classes"></b></button>
+      <button class="nav" data-p="todo"><span>To-Do</span><b class="badge" data-count="todo"></b></button>
+      <button class="nav" data-p="disc"><span>Discussions</span><b class="badge" data-count="disc"></b></button>
+      <button class="nav" data-p="ann"><span>Announcements</span><b class="badge" data-count="ann"></b></button>
+      <button class="nav" data-p="crs"><span>Courses</span><b class="badge" data-count="crs"></b></button>
+      <button class="nav" data-p="grades"><span>Grades</span></button>
+      <button class="nav" data-p="inbox"><span>Inbox</span></button>
+    </nav>
+    <div class="railbottom">
+      <button class="nav" data-p="settings"><span>Settings</span></button>
+    </div>
+  </aside>
+  <main class="content">
+    <div class="pagehead"><h1 id="pageTitle">Week board</h1>
+      <div class="searchwrap"><input id="globalSearch" type="search" placeholder="Search everything…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="searchSuggest" aria-expanded="false"><ul class="suggest" id="searchSuggest" role="listbox" hidden></ul></div>
+      <div class="updated" id="updatedAt"></div></div>
+    <div class="stats">
+      <div class="stat"><b data-count="todo"></b><span>to do</span></div>
+      <div class="stat"><b data-count="week"></b><span>due this week</span></div>
+      <div class="stat"><b data-count="disc"></b><span>discussions</span></div>
+      <div class="stat"><b data-count="done"></b><span>done</span></div>
+    </div>
+    <div class="filterbar" id="filterBar">
+      <div class="chips" id="courseChips"></div>
+      <select id="fType" aria-label="Type"><option value="all">All types</option><option value="assignment">Assignments</option><option value="quiz">Quizzes</option><option value="discussion">Discussions</option></select>
+      <select id="fDue" aria-label="Due date"><option value="any">Any due date</option><option value="today">Due today</option><option value="week">Due in 7 days</option><option value="2weeks">Due in 14 days</option><option value="nodate">No due date</option></select>
+      <select id="fStatus" aria-label="Status"><option value="all">To do and done</option><option value="todo">To do</option><option value="done">Done</option></select>
+      <button class="ghostbtn" id="fClear" hidden>Clear filters</button>
+    </div>
+    <div class="panel active" id="week">
+      <div class="upnext" id="upnext"></div>
+      <div class="controls">
+        <span class="autolabel">Auto-schedule</span>
+        <select id="autoAlgo">
+          <option value="balanced">Balanced load</option>
+          <option value="deadline">Deadline-first</option>
+          <option value="front">Front-load</option>
+          <option value="jit">Just-in-time</option>
+        </select>
+        <button class="dlbtn" id="autoBtn">Plan my week</button>
+        <button class="ghostbtn" id="clearPlan">Clear</button>
+      </div>
+      <div class="controls">
+        <label class="sortbox">Sort by
+          <select id="traySort">
+            <option value="due">Due date</option>
+            <option value="points">Points (high→low)</option>
+            <option value="course">Course</option>
+            <option value="title">Name (A→Z)</option>
+          </select>
+        </label>
+      </div>
+      <div class="board" id="weekboard"></div>
+      <div class="tray-label">Unscheduled</div>
+      <div class="tray" id="weektray"></div>
+    </div>
+    <div class="panel" id="classes"><div id="classView"></div></div>
+    <div class="panel" id="todo"></div>
+    <div class="panel" id="disc"></div>
+    <div class="panel" id="ann"></div>
+    <div class="panel" id="crs"></div>
+    <div class="panel" id="grades"><div id="gradesBox"></div></div>
+    <div class="panel" id="inbox">
+      <div class="inbox-top"><button class="dlbtn" id="composeBtn">New message</button>
+        <button class="ghostbtn" id="inboxRefresh">Refresh</button></div>
+      <div id="inboxBox"><p class="empty">Loading messages…</p></div>
+    </div>
+    <div class="panel" id="settings">
+      <div class="setgroup" id="accountGroup" style="display:none">
+        <h2>Account</h2>
+        <div class="setrow"><div><div class="st" id="acctName">Canvas account</div><div class="sd" id="acctSchool"></div></div>
+          <button class="ghostbtn" id="logoutBtn">Log out</button></div>
+      </div>
+      <div class="setgroup">
+        <h2>Appearance</h2>
+        <div class="setrow">
+          <div><div class="st">Theme</div><div class="sd">Light, dark, or match your system.</div></div>
+          <select id="themeSel"><option value="light">Light</option><option value="dark">Dark</option><option value="system">Match system</option></select>
+        </div>
+        <div class="setrow">
+          <div><div class="st">Accent color</div><div class="sd">Buttons, highlights, and the selected tab.</div></div>
+          <input type="color" id="accentInput">
+        </div>
+      </div>
+      <div class="setgroup">
+        <h2>Week board</h2>
+        <div class="setrow">
+          <div><div class="st">Board view</div><div class="sd">A rolling next-7-days, or the current calendar week.</div></div>
+          <select id="boardView"><option value="rolling">Next 7 days</option><option value="week">This week</option></select>
+        </div>
+        <div class="setrow">
+          <div><div class="st">Week starts on</div><div class="sd">Used when board view is "This week."</div></div>
+          <select id="weekStart"><option value="0">Sunday</option><option value="1">Monday</option></select>
+        </div>
+        <div class="setrow"><div class="st">Show weekends</div><label class="switch"><input type="checkbox" id="weekends"><span class="track"></span></label></div>
+        <div class="setrow">
+          <div><div class="st">Heavy-day threshold</div><div class="sd">Flag a day once this many tasks land on it.</div></div>
+          <input type="number" id="dayThreshold" min="2" max="12">
+        </div>
+      </div>
+      <div class="setgroup">
+        <h2>Planning</h2>
+        <div class="setrow">
+          <div><div class="st">Start-early aggressiveness</div><div class="sd">How far ahead suggested start dates land. Applies in the installed app.</div></div>
+          <select id="aggr"><option value="relaxed">Relaxed</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option></select>
+        </div>
+        <div class="setrow">
+          <div><div class="st">Default tab</div><div class="sd">Which section opens when you launch.</div></div>
+          <select id="defaultTab"><option value="week">Week board</option><option value="todo">To-Do</option><option value="disc">Discussions</option><option value="ann">Announcements</option><option value="crs">Courses</option><option value="grades">Grades</option></select>
+        </div>
+        <div class="setrow">
+          <div><div class="st">Show badge and training courses</div><div class="sd">Orientation badges and compliance trainings are hidden by default. Applies in the installed app.</div></div>
+          <label class="switch"><input type="checkbox" id="showAllCourses"><span class="track"></span></label>
+        </div>
+        <div class="setrow">
+          <div><div class="st">Show tips</div><div class="sd">Short hints that appear once, the first time you use a feature.</div></div>
+          <label class="switch"><input type="checkbox" id="showTips"><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="setgroup">
+        <h2>Updates</h2>
+        <div class="setrow"><div><div class="st">Auto-refresh</div><div class="sd">Checks Canvas for changes every few minutes and whenever you come back, then updates your dashboard. Uses very little data.</div></div>
+          <label class="switch"><input type="checkbox" id="autoOn"><span class="track"></span></label></div>
+      </div>
+      <div class="setgroup">
+        <h2>Notifications</h2>
+        <div class="setrow"><div><div class="st">Due date reminders</div><div class="sd">For work you haven't turned in yet.</div></div>
+          <label class="switch"><input type="checkbox" id="nDue"><span class="track"></span></label></div>
+        <div class="setrow" id="nWhenRow"><div><div class="st">Remind me</div><div class="sd">Pick as many as you like.</div></div>
+          <div class="checks">
+            <label><input type="checkbox" data-when="day_before"> The day before</label>
+            <label><input type="checkbox" data-when="morning"> The morning it's due, at <select id="nMorning"></select></label>
+            <label><input type="checkbox" data-when="hours3"> 3 hours before</label>
+            <div class="chips" id="nCustom"></div>
+            <div class="addtime"><input type="number" id="nAmount" min="1" max="14" value="2" aria-label="How many">
+              <select id="nUnit"><option value="60">hours</option><option value="1440">days</option></select>
+              <button class="ghostbtn" id="nAdd" type="button">Add a time</button></div>
+          </div></div>
+        <div class="setrow"><div class="st">New assignments</div>
+          <label class="switch"><input type="checkbox" id="nNewA"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">New announcements</div>
+          <label class="switch"><input type="checkbox" id="nNewN"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Grades posted</div>
+          <label class="switch"><input type="checkbox" id="nNewG"><span class="track"></span></label></div>
+        <div class="setrow"><div><div class="st">Suggested start days</div><div class="sd">A nudge on the day Semester suggests starting something.</div></div>
+          <label class="switch"><input type="checkbox" id="nStart"><span class="track"></span></label></div>
+        <div class="setrow"><div><div class="st">Quiet hours</div><div class="sd">Nothing arrives overnight. Anything that comes up is held, not lost.</div></div>
+          <label class="switch"><input type="checkbox" id="nQuiet"><span class="track"></span></label></div>
+        <div class="setrow" id="nQuietRow"><div class="st">Quiet from</div>
+          <div class="checks"><label><select id="nQFrom"></select> until <select id="nQTo"></select></label></div></div>
+        <div class="setrow"><div><div class="st">Mute classes</div><div class="sd">Click a class to stop its notifications.</div></div>
+          <div class="chips" id="nMute"></div></div>
+        <div class="setrow"><div><div class="st">Even when Semester is closed</div><div class="sd">Checks Canvas about once an hour in the background (Mac).</div></div>
+          <label class="switch"><input type="checkbox" id="bgNotify"><span class="track"></span></label></div>
+        <div class="setrow"><div><div class="st">Test notification</div><div class="sd">Make sure notifications can reach you.</div></div>
+          <button class="ghostbtn" id="nTest">Send test</button></div>
+      </div>
+      <div class="setgroup">
+        <h2>Sections</h2>
+        <p class="sd" style="margin:0 0 10px">Choose which tabs appear in the sidebar. Week board is always shown.</p>
+        <div class="setrow"><div class="st">To-Do</div><label class="switch"><input type="checkbox" data-tab="todo"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Discussions</div><label class="switch"><input type="checkbox" data-tab="disc"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Announcements</div><label class="switch"><input type="checkbox" data-tab="ann"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Courses</div><label class="switch"><input type="checkbox" data-tab="crs"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Grades</div><label class="switch"><input type="checkbox" data-tab="grades"><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Inbox</div><label class="switch"><input type="checkbox" data-tab="inbox"><span class="track"></span></label></div>
+      </div>
+      <div class="setgroup">
+        <h2>Calendar</h2>
+        <div class="setrow"><div class="st">Include deadlines</div><label class="switch"><input type="checkbox" id="icsDue" checked><span class="track"></span></label></div>
+        <div class="setrow"><div class="st">Include planned work-days</div><label class="switch"><input type="checkbox" id="icsPlan" checked><span class="track"></span></label></div>
+        <div class="setrow" id="icsFeedRow" style="display:none"><div><div class="st">Live calendar feed</div><div class="sd">Subscribe once and your deadlines stay in sync while Semester is running.<span class="feedurl" id="icsFeedUrl"></span></div></div>
+          <button class="ghostbtn" id="icsCopy">Copy URL</button></div>
+        <div class="setrow"><div><div class="st">Export calendar</div><div class="sd">Or download a one-time .ics file to import into Google or Apple Calendar.</div></div>
+          <button class="dlbtn" id="icsExport">Download .ics</button></div>
+      </div>
+      <div class="setgroup">
+        <h2>About</h2>
+        <div class="setrow"><div><div class="st">Check for updates on launch</div><div class="sd">Notify me when a newer version is released.</div></div>
+          <label class="switch"><input type="checkbox" id="autoUpdate"><span class="track"></span></label></div>
+        <div class="setrow"><div><div class="st">Semester <span id="verNum"></span></div><div class="sd">Updates keep your settings, plan, and notes.
+          <a id="verLink" href="https://github.com/LED-esma/semester/releases" target="_blank">What's new</a> &middot;
+          <a href="https://github.com/LED-esma/semester" target="_blank">Source code</a></div></div>
+          <button class="ghostbtn" id="checkUpdate">Check now</button></div>
+        <p class="sd" style="margin:10px 0 0">Not affiliated with Instructure. Canvas is a trademark of Instructure, Inc.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <button class="modal-x" id="modalX">✕</button>
+    <div class="modal-course" id="mCourse"></div>
+    <h2 id="mTitle"></h2>
+    <div class="modal-meta" id="mMeta"></div>
+    <div class="modal-desc" id="mDesc"></div>
+    <div class="modal-fb" id="mFb"></div>
+    <div class="modal-submit" id="mSubmit"></div>
+    <div class="modal-notes" id="mNotes"></div>
+    <div class="modal-actions" id="mActions"></div>
+    <a class="modal-open" id="mLink" target="_blank">Open in Canvas ↗</a>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="focusbar" id="focusBar"></div>
+<div class="updbar" id="updBar"></div>
+
+<script type="application/json" id="pagedata">__DATA__</script>
+<script>
+__JS__
+</script>
+<script>
+  // One boot: draw the panels from the page's data, then hand the same data to the app.
+  (function () {
+    var data = JSON.parse(document.getElementById('pagedata').textContent);
+    renderViews(data);
+    startApp(data);
+  })();
+</script>
+</body></html>

@@ -1,10 +1,11 @@
 # Your private Canvas token lives here — never commit it
 config.json
 
-# Generated output
-dashboard.html
-dashboard_data.json
-planner_data.json
+# Generated output (at the top level only — static/dashboard.html is the template
+# these are built from, and has to ship)
+/dashboard.html
+/dashboard_data.json
+/planner_data.json
 
 # Python
 __pycache__/
